@@ -1,0 +1,35 @@
+services:
+  backend:
+    build: ./backend
+    container_name: plexdiscover-backend
+    restart: unless-stopped
+    ports:
+      - "8788:8788"
+    env_file:
+      - .env
+    environment:
+      - PYTHONUNBUFFERED=1
+    volumes:
+      - ./data:/data
+      - ./backend/app:/app/app # Hot reload em desenvolvimento
+      - ${DOWNLOADS_PATH:-/volume1/Media/Downloads/complete}:/downloads:rw
+      - ${MUSIC_PATH:-/volume1/Media/Music}:/music:rw
+      - ${DISCOVERY_PATH:-/volume1/Media/Misc/MusicDiscovery}:/music_discovery:rw
+    networks:
+      - plexdiscover-net
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: plexdiscover-frontend
+    restart: unless-stopped
+    ports:
+      - "8789:80"
+    networks:
+      - plexdiscover-net
+
+networks:
+  plexdiscover-net:
+    driver: bridge
+

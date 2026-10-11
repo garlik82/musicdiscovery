@@ -1,0 +1,9 @@
+fastapi
+uvicorn
+sqlmodel
+plexapi
+httpx
+pydantic-settings
+mutagen
+
+
