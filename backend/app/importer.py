@@ -4,7 +4,7 @@ import shutil
 import httpx
 import mutagen
 from pathlib import Path
-from typing import Optional, Dict
+from typing import Optional, Dict, List, Any
 
 def sanitize_name(name: str) -> str:
     """Remove caracteres inválidos para pastas e nomes de ficheiros."""
@@ -296,5 +296,234 @@ def trigger_plex_music_scan(server, library_name: Optional[str] = None, purge_or
     except Exception as e:
         print(f"Erro ao pedir scan ao Plex: {e}")
     return False
+
+def inspect_flac_audio_quality(file_path: str) -> Dict:
+    """
+    Inspeciona um ficheiro FLAC com mutagen para verificar a taxa de amostragem
+    e a profundidade de bits (ex: 16-bit / 44.1 kHz CD Quality).
+    """
+    if not os.path.exists(file_path):
+        return {"valid": False, "error": "Ficheiro não existe", "is_cd_quality": False, "description": "Inexistente"}
+        
+    try:
+        from mutagen.flac import FLAC
+        audio = FLAC(file_path)
+        sample_rate = getattr(audio.info, 'sample_rate', 0)
+        bits_per_sample = getattr(audio.info, 'bits_per_sample', 0)
+        channels = getattr(audio.info, 'channels', 2)
+        duration = getattr(audio.info, 'length', 0)
+        
+        is_cd_quality = (sample_rate == 44100 and bits_per_sample == 16)
+        desc = f"FLAC {bits_per_sample}-bit / {sample_rate/1000:.1f} kHz"
+        
+        return {
+            "valid": True,
+            "sample_rate": sample_rate,
+            "bits_per_sample": bits_per_sample,
+            "channels": channels,
+            "duration": duration,
+            "is_cd_quality": is_cd_quality,
+            "description": desc
+        }
+    except Exception as e:
+        return {
+            "valid": False,
+            "error": str(e),
+            "is_cd_quality": False,
+            "description": "FLAC Desconhecido"
+        }
+
+async def lookup_musicbrainz_album(artist: str, album: str = "", track_title: str = "") -> Optional[Dict]:
+    """
+    Pesquisa na API do MusicBrainz pelo álbum oficial de estúdio do artista.
+    Devolve metadados canónicos e a lista oficial de faixas.
+    """
+    clean_artist = re.sub(r'\(.*?\)|\[.*?\]', '', artist).strip()
+    clean_album = re.sub(r'\(.*?\)|\[.*?\]', '', album).strip() if album else ""
+    clean_track = re.sub(r'\(.*?\)|\[.*?\]', '', track_title).strip() if track_title else ""
+    
+    headers = {
+        "User-Agent": "PlexDiscover/1.0 (contact@plexdiscover.local)"
+    }
+    
+    release_id = None
+    canonical_album = clean_album
+    canonical_artist = clean_artist
+    
+    try:
+        async with httpx.AsyncClient(timeout=12.0) as client:
+            # 1. Se temos o nome do álbum, pesquisar releases diretamente
+            if clean_album and clean_album.lower() not in ["singles", "unknown", "desconhecido"]:
+                query = f'release:"{clean_album}" AND artist:"{clean_artist}"'
+                url = f"https://musicbrainz.org/ws/2/release/?query={httpx.URL('', params={'q': query}).params['q']}&fmt=json"
+                res = await client.get(url, headers=headers)
+                if res.status_code == 200:
+                    data = res.json()
+                    releases = data.get("releases", [])
+                    # Dar prioridade a lançamentos oficiais de estúdio (Album)
+                    for r in releases:
+                        status = r.get("status", "")
+                        rg = r.get("release-group", {})
+                        p_type = rg.get("primary-type", "")
+                        if p_type == "Album" or status == "Official":
+                            release_id = r.get("id")
+                            canonical_album = r.get("title", clean_album)
+                            canonical_artist = r.get("artist-credit", [{}])[0].get("name", clean_artist)
+                            break
+                    if not release_id and releases:
+                        release_id = releases[0].get("id")
+                        canonical_album = releases[0].get("title", clean_album)
+                        canonical_artist = releases[0].get("artist-credit", [{}])[0].get("name", clean_artist)
+
+            # 2. Se não encontramos pelo álbum, pesquisar pela música de referência
+            if not release_id and clean_track:
+                query = f'recording:"{clean_track}" AND artist:"{clean_artist}"'
+                url = f"https://musicbrainz.org/ws/2/recording/?query={httpx.URL('', params={'q': query}).params['q']}&fmt=json"
+                res = await client.get(url, headers=headers)
+                if res.status_code == 200:
+                    data = res.json()
+                    recordings = data.get("recordings", [])
+                    if recordings:
+                        for rec in recordings:
+                            for r in rec.get("releases", []):
+                                status = r.get("status", "")
+                                rg = r.get("release-group", {})
+                                p_type = rg.get("primary-type", "")
+                                if p_type == "Album" or status == "Official":
+                                    release_id = r.get("id")
+                                    canonical_album = r.get("title", clean_album)
+                                    canonical_artist = rec.get("artist-credit", [{}])[0].get("name", clean_artist)
+                                    break
+                            if release_id:
+                                break
+                        if not release_id and recordings and recordings[0].get("releases"):
+                            r0 = recordings[0]["releases"][0]
+                            release_id = r0.get("id")
+                            canonical_album = r0.get("title", clean_album)
+
+            # 3. Se temos o release_id, obter o alinhamento completo de faixas (tracklist)
+            if release_id:
+                detail_url = f"https://musicbrainz.org/ws/2/release/{release_id}?inc=recordings+artist-credits&fmt=json"
+                d_res = await client.get(detail_url, headers=headers)
+                if d_res.status_code == 200:
+                    rel_data = d_res.json()
+                    media = rel_data.get("media", [])
+                    tracks = []
+                    pos = 1
+                    for m in media:
+                        for t in m.get("tracks", []):
+                            rec = t.get("recording", {})
+                            tracks.append({
+                                "position": t.get("position", pos),
+                                "title": t.get("title", rec.get("title", f"Track {pos}")),
+                                "length": t.get("length", rec.get("length", 0)),
+                                "id": rec.get("id", t.get("id")),
+                            })
+                            pos += 1
+                            
+                    date_val = rel_data.get("date", "")
+                    year_val = date_val.split("-")[0] if date_val else ""
+                    return {
+                        "artist": canonical_artist,
+                        "album": canonical_album,
+                        "release_id": release_id,
+                        "date": date_val,
+                        "year": year_val,
+                        "track_count": len(tracks),
+                        "tracks": tracks
+                    }
+    except Exception as e:
+        print(f"Erro na pesquisa de álbum MusicBrainz: {e}")
+
+    # Fallback simples caso não encontre
+    return {
+        "artist": clean_artist,
+        "album": clean_album or "Álbum Desconhecido",
+        "release_id": None,
+        "date": "",
+        "year": "",
+        "track_count": 0,
+        "tracks": []
+    }
+
+def tag_album_flac_file(file_path: str, album_meta: Dict, track_info: Dict):
+    """
+    Aplica tags Vorbis completas ao ficheiro FLAC do álbum.
+    """
+    try:
+        from mutagen.flac import FLAC
+        audio = FLAC(file_path)
+        audio["ARTIST"] = album_meta.get("artist", "")
+        audio["ALBUM"] = album_meta.get("album", "")
+        audio["TITLE"] = track_info.get("title", os.path.splitext(os.path.basename(file_path))[0])
+        
+        pos = track_info.get("position")
+        total = album_meta.get("track_count")
+        if pos:
+            audio["TRACKNUMBER"] = str(pos)
+            if total:
+                audio["TRACKTOTAL"] = str(total)
+                
+        if album_meta.get("date"):
+            audio["DATE"] = str(album_meta["date"])
+            
+        if track_info.get("id"):
+            audio["MUSICBRAINZ_TRACKID"] = str(track_info["id"])
+        if album_meta.get("release_id"):
+            audio["MUSICBRAINZ_ALBUMID"] = str(album_meta["release_id"])
+            
+        audio.save()
+    except Exception as e:
+        print(f"Erro ao aplicar tags ao ficheiro FLAC {file_path}: {e}")
+
+def organize_and_move_album(source_files: List[str], album_meta: Dict, tracks_info: Optional[List[Dict]] = None, dest_base: str = "/music") -> str:
+    """
+    Move todos os ficheiros do álbum para a biblioteca definitiva (/music/{Artista}/{Álbum}).
+    Renomeia ordenadamente: {01} - {Título}.flac
+    """
+    artist = sanitize_name(album_meta.get("artist", "Artista Desconhecido"))
+    album = sanitize_name(album_meta.get("album", "Álbum Desconhecido"))
+    
+    dest_dir = os.path.join(dest_base, artist, album)
+    os.makedirs(dest_dir, exist_ok=True)
+    
+    tracks_by_pos = {t.get("position"): t for t in (tracks_info or []) if t.get("position")}
+    
+    for idx, src in enumerate(source_files, 1):
+        if not os.path.exists(src):
+            continue
+            
+        ext = os.path.splitext(src)[1].lower()
+        base_name = os.path.splitext(os.path.basename(src))[0]
+        
+        m = re.match(r'^(\d+)', base_name.strip())
+        track_num = int(m.group(1)) if m else idx
+        
+        matched_track = tracks_by_pos.get(track_num)
+        if matched_track:
+            title = sanitize_name(matched_track.get("title", base_name))
+        else:
+            clean_t = re.sub(r'^\d+[\s\-_.]*', '', base_name).strip()
+            title = sanitize_name(clean_t) if clean_t else f"Faixa {track_num:02d}"
+            
+        final_filename = f"{track_num:02d} - {title}{ext}"
+        target_path = os.path.join(dest_dir, final_filename)
+        
+        if ext == ".flac":
+            tag_album_flac_file(src, album_meta, matched_track or {"position": track_num, "title": title})
+            
+        shutil.move(src, target_path)
+        print(f"Álbum importado: {target_path}")
+        
+    for src in source_files:
+        try:
+            parent = os.path.dirname(src)
+            if os.path.exists(parent) and not os.listdir(parent) and parent != "/downloads":
+                shutil.rmtree(parent)
+        except Exception:
+            pass
+            
+    return dest_dir
+
 
 

@@ -157,6 +157,66 @@
       </div>
     </div>
 
+    <!-- 2.5. Álbuns Favoritos & Download Automático (FLAC 16/44) -->
+    <div class="settings-card">
+      <div class="card-title-row">
+        <span class="card-icon">⭐</span>
+        <div>
+          <h3>Álbuns Favoritos & Download Automático em FLAC (16/44)</h3>
+          <p class="card-sub">Ao favoritares uma música no Plexamp, o PlexDiscover descarrega automaticamente o álbum completo em qualidade CD (FLAC 16-bit / 44.1 kHz) para a tua biblioteca permanente (/music).</p>
+        </div>
+      </div>
+
+      <div class="setting-group">
+        <div class="toggle-row">
+          <div>
+            <strong>Download Automático ao Favoritar</strong>
+            <p class="field-hint">Deteta quando avalias uma música com ⭐ (ou ❤️ coração) no Plexamp ou via Webhook do Plex e obtém o álbum completo via Soulseek (slskd).</p>
+          </div>
+          <label class="switch">
+            <input 
+              type="checkbox" 
+              v-model="settings.auto_download_favorite_albums" 
+              @change="saveFavoriteAlbumSettings"
+            />
+            <span class="slider round"></span>
+          </label>
+        </div>
+      </div>
+
+      <div class="setting-group" style="margin-top: 14px;">
+        <label class="setting-label">Formato & Qualidade de Áudio</label>
+        <div class="form-field">
+          <select v-model="settings.favorite_album_quality" @change="saveFavoriteAlbumSettings" class="select-input">
+            <option value="flac_16_44">FLAC 16-bit / 44.1 kHz (Qualidade CD Red Book - Recomendado)</option>
+          </select>
+          <span class="field-hint">Filtra e prioriza pastas que contenham os metadados do CD oficial, evitando Hi-Res com tamanhos astronómicos ou perdas de compressão.</span>
+        </div>
+      </div>
+
+      <!-- Webhook do Plex -->
+      <div class="setting-group" style="margin-top: 16px; background: #f8fafc; padding: 14px; border-radius: 8px; border: 1px solid #e2e8f0;">
+        <label class="setting-label" style="display: flex; align-items: center; gap: 6px;">
+          <span>⚡ Webhook do Plex (Deteção Instantânea)</span>
+        </label>
+        <p class="field-hint" style="margin-bottom: 8px;">
+          Configura este webhook nas definições do teu Plex Media Server (<strong>Definições → Webhooks → Adicionar Webhook</strong>) para descarregar o álbum no mesmo segundo em que favoritadas uma faixa:
+        </p>
+        <div style="display: flex; gap: 8px; align-items: center;">
+          <input 
+            type="text" 
+            readonly 
+            :value="plexWebhookUrl" 
+            class="text-input" 
+            style="font-family: monospace; font-size: 13px; background: #fff;"
+          />
+          <button @click="copyWebhookUrl" class="btn btn-sm" style="white-space: nowrap;">
+            {{ copiedWebhook ? '✓ Copiado!' : '📋 Copiar URL' }}
+          </button>
+        </div>
+      </div>
+    </div>
+
     <!-- 3. Contas & Integrações -->
     <div class="settings-card">
       <div class="card-title-row">
@@ -346,7 +406,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, computed, onMounted } from 'vue'
 
 const props = defineProps({
   apiBase: {
@@ -372,8 +432,40 @@ const settings = ref({
   buffer_trigger: 2,
   max_session_tracks: 20,
   plex_discovery_library: 'Discover',
-  plex_permanent_library: 'Music'
+  plex_permanent_library: 'Music',
+  auto_download_favorite_albums: true,
+  favorite_album_quality: 'flac_16_44'
 })
+
+const copiedWebhook = ref(false)
+const plexWebhookUrl = computed(() => {
+  return `${window.location.protocol}//${window.location.hostname}:8788/api/plex-webhook`
+})
+
+function copyWebhookUrl() {
+  if (navigator.clipboard) {
+    navigator.clipboard.writeText(plexWebhookUrl.value)
+    copiedWebhook.value = true
+    setTimeout(() => { copiedWebhook.value = false }, 2500)
+  }
+}
+
+async function saveFavoriteAlbumSettings() {
+  try {
+    await fetch(`${props.apiBase}/settings`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        auto_download_favorite_albums: settings.value.auto_download_favorite_albums,
+        favorite_album_quality: settings.value.favorite_album_quality
+      })
+    })
+    emit('settings-updated')
+  } catch (e) {
+    console.error("Erro ao gravar definições de álbuns favoritos:", e)
+  }
+}
+
 
 async function savePlexLibraries() {
   try {

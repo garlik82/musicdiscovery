@@ -298,3 +298,220 @@ class SlskdClient:
                 
         return None
 
+    async def download_batch(self, username: str, files: List[Dict]) -> bool:
+        """
+        Adiciona uma lista de ficheiros à fila de download do slskd de uma só vez.
+        files: [{"filename": str, "size": int}, ...]
+        """
+        payload = [{"filename": f["filename"], "size": f["size"]} for f in files if "filename" in f and "size" in f]
+        if not payload:
+            return False
+            
+        try:
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                res = await client.post(
+                    f"{self.url}/api/v0/transfers/downloads/{username}",
+                    json=payload,
+                    headers=self._headers()
+                )
+                res.raise_for_status()
+                return True
+        except Exception as e:
+            print(f"Erro ao agendar download de lote no slskd ({username}): {e}")
+            return False
+
+    async def search_album(self, artist: str, album: str, expected_track_count: int = 0) -> Optional[Dict]:
+        """
+        Pesquisa um álbum completo no Soulseek via slskd, agrupando resultados por utilizador e pasta.
+        Prioriza pastas completas com ficheiros FLAC em qualidade CD 16-bit / 44.1 kHz (Red Book),
+        penalizando versões Hi-Res (24-bit/96kHz), vinil ou compilações incompletas.
+        """
+        import re
+        import os
+
+        # Limpar caracteres especiais dos nomes para melhorar a pesquisa no Soulseek
+        clean_artist = re.sub(r'[^\w\s]', ' ', artist).strip()
+        clean_album = re.sub(r'\(.*?\)|\[.*?\]', '', album)
+        clean_album = re.sub(r'[^\w\s]', ' ', clean_album).strip()
+        
+        search_query = f"{clean_artist} {clean_album} flac".strip()
+        search_id = str(uuid.uuid4())
+
+        async with httpx.AsyncClient(timeout=15.0) as client:
+            await self._clean_stale_searches(client)
+            
+            payload = {
+                "id": search_id,
+                "searchText": search_query,
+                "searchTimeout": 8000,
+                "filterResponses": False
+            }
+            
+            try:
+                start_res = await client.post(f"{self.url}/api/v0/searches", json=payload, headers=self._headers())
+                start_res.raise_for_status()
+            except Exception as e:
+                print(f"Erro ao iniciar pesquisa de álbum no slskd: {e}")
+                return None
+
+            max_wait = 25.0
+            waited = 0.0
+            in_progress_time = 0.0
+            responses = []
+
+            while waited < max_wait:
+                await asyncio.sleep(1.0)
+                waited += 1.0
+
+                try:
+                    s_res = await client.get(f"{self.url}/api/v0/searches/{search_id}", headers=self._headers())
+                    if s_res.status_code != 200:
+                        continue
+                    s_data = s_res.json()
+                    state = s_data.get("state", "")
+                    is_complete = s_data.get("isComplete", False) or state.startswith("Completed")
+
+                    if state == "Queued":
+                        continue
+
+                    in_progress_time += 1.0
+
+                    if is_complete or in_progress_time >= 9.0:
+                        res = await client.get(f"{self.url}/api/v0/searches/{search_id}/responses", headers=self._headers())
+                        if res.status_code == 200:
+                            responses = res.json()
+                            if responses:
+                                break
+                except Exception as ex:
+                    print(f"Erro ao obter respostas de álbum slskd: {ex}")
+
+            # Limpar pesquisa no slskd
+            try:
+                await client.delete(f"{self.url}/api/v0/searches/{search_id}", headers=self._headers())
+            except Exception:
+                pass
+
+            if not responses:
+                return None
+
+            # Agrupar ficheiros por (username, pasta)
+            candidates_by_folder = {}
+
+            artist_words = [w for w in re.sub(r'[^\w\s]', ' ', artist.lower()).split() if len(w) >= 2]
+            album_words = [w for w in re.sub(r'[^\w\s]', ' ', album.lower()).split() if len(w) >= 2]
+
+            for resp in responses:
+                username = resp.get("username")
+                hasFreeUploadSlot = resp.get("hasFreeUploadSlot", False)
+                queueLength = resp.get("queueLength", 0)
+                uploadSpeed = resp.get("uploadSpeed", 0)
+
+                if queueLength > 60:
+                    continue
+
+                for f in resp.get("files", []):
+                    fname = f.get("filename", "")
+                    if not fname.lower().endswith(".flac"):
+                        continue
+
+                    norm_path = fname.replace('\\', '/')
+                    folder_path = os.path.dirname(norm_path)
+                    folder_lower = folder_path.lower()
+
+                    # Validar se a pasta contém referências ao artista ou ao álbum
+                    if artist_words and not any(w in folder_lower for w in artist_words):
+                        continue
+                    if album_words and not any(w in folder_lower for w in album_words):
+                        continue
+
+                    key = (username, folder_path)
+                    if key not in candidates_by_folder:
+                        candidates_by_folder[key] = {
+                            "username": username,
+                            "folder": folder_path,
+                            "hasFreeUploadSlot": hasFreeUploadSlot,
+                            "queueLength": queueLength,
+                            "uploadSpeed": uploadSpeed,
+                            "files": []
+                        }
+
+                    candidates_by_folder[key]["files"].append({
+                        "filename": fname,
+                        "size": f.get("size", 0),
+                        "bitrate": f.get("bitRate", 0),
+                        "length": f.get("length", 0)
+                    })
+
+            # Avaliar e pontuar os candidatos a álbum completo
+            scored_candidates = []
+
+            for key, cand in candidates_by_folder.items():
+                flac_files = cand["files"]
+                track_count = len(flac_files)
+                
+                # Mínimo de 3 faixas para ser considerado um álbum válido
+                if track_count < 3:
+                    continue
+
+                folder_lower = cand["folder"].lower()
+                points = 0
+
+                # 1. Disponibilidade do Utilizador (Slots Livres e Velocidade)
+                if cand["hasFreeUploadSlot"]:
+                    points += 5000
+                points -= (cand["queueLength"] * 100)
+                speed_kb = cand["uploadSpeed"] / 1024
+                points += min(int(speed_kb / 10), 600)
+
+                # 2. Correspondência com o Número de Faixas Esperadas do MusicBrainz
+                if expected_track_count > 0:
+                    if track_count == expected_track_count:
+                        points += 4500
+                    elif abs(track_count - expected_track_count) <= 1:
+                        points += 3000
+                    elif track_count >= int(expected_track_count * 0.8):
+                        points += 1500
+                    elif track_count < int(expected_track_count * 0.5):
+                        points -= 2000
+                else:
+                    if track_count >= 8:
+                        points += 2000
+                    elif track_count >= 5:
+                        points += 1000
+
+                # 3. Qualidade CD FLAC 16-bit / 44.1 kHz (Red Book)
+                # Bónus para indícios positivos de 16/44 ou CD oficial
+                cd_indicators = ["16-44", "16/44", "16 44", "16bit", "44.1", "44100", "cd", "redbook", "eac", "cue", "log"]
+                if any(ind in folder_lower for ind in cd_indicators):
+                    points += 3000
+
+                # Penalização forte para Hi-Res (24/96, 24/192) ou vinil (não é 16/44.1 CD standard)
+                hi_res_indicators = ["24-96", "24/96", "24-192", "24/192", "24-88", "24/88", "24bit", "hi-res", "hires", "sacd", "vinyl", "lp", "cassette", "tape"]
+                if any(ind in folder_lower for ind in hi_res_indicators):
+                    points -= 3500
+
+                # 4. Verificação de Bitrate Médio
+                valid_bitrates = [f["bitrate"] for f in flac_files if f.get("bitrate", 0) > 0]
+                if valid_bitrates:
+                    avg_bitrate = sum(valid_bitrates) / len(valid_bitrates)
+                    # Bitrate típico de FLAC 16/44.1: entre 650 kbps e 1100 kbps
+                    if 650 <= avg_bitrate <= 1150:
+                        points += 2000
+                    elif avg_bitrate > 1800:
+                        # Taxa de bits muito elevada indica ficheiro 24-bit Hi-Res
+                        points -= 2500
+
+                cand["score"] = points
+                cand["total_tracks"] = track_count
+                scored_candidates.append(cand)
+
+            if not scored_candidates:
+                return None
+
+            # Ordenar pelo maior score
+            scored_candidates.sort(key=lambda x: x["score"], reverse=True)
+            best = scored_candidates[0]
+            print(f"Melhor candidato de álbum encontrado: {best['username']} ({best['total_tracks']} faixas, pontuação {best['score']}) -> {best['folder']}")
+            return best
+
+

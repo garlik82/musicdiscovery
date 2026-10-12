@@ -1,4 +1,4 @@
-from fastapi import FastAPI, HTTPException, Response, Query
+from fastapi import FastAPI, HTTPException, Response, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from plexapi.myplex import MyPlexPinLogin, MyPlexAccount
 import json
@@ -6,6 +6,8 @@ import os
 import httpx
 import time
 import shutil
+import uuid
+import asyncio
 from typing import Optional, Dict, List, Set, Any
 from pathlib import Path
 
@@ -86,7 +88,53 @@ def remove_ignored_artist(artist: str):
     ignored.discard(artist.lower().strip())
     save_ignored_artists(ignored)
 
+ALBUM_DOWNLOADS_FILE = os.path.join(DATA_DIR, "album_downloads.json")
+
+def load_album_downloads() -> list:
+    if os.path.exists(ALBUM_DOWNLOADS_FILE):
+        try:
+            with open(ALBUM_DOWNLOADS_FILE, "r") as f:
+                return json.load(f)
+        except Exception:
+            return []
+    return []
+
+def save_album_downloads(downloads: list):
+    try:
+        with open(ALBUM_DOWNLOADS_FILE, "w") as f:
+            json.dump(downloads, f, indent=2)
+    except Exception as e:
+        print(f"Erro ao gravar album_downloads: {e}")
+
+PROCESSED_FAVORITES_FILE = os.path.join(DATA_DIR, "processed_favorites.json")
+
+def load_processed_favorites() -> set:
+    if os.path.exists(PROCESSED_FAVORITES_FILE):
+        try:
+            with open(PROCESSED_FAVORITES_FILE, "r") as f:
+                return set(item.lower().strip() for item in json.load(f))
+        except Exception:
+            return set()
+    return set()
+
+def save_processed_favorites(favorites: set):
+    try:
+        with open(PROCESSED_FAVORITES_FILE, "w") as f:
+            json.dump(sorted(list(favorites)), f)
+    except Exception as e:
+        print(f"Erro ao gravar favoritos processados: {e}")
+
+def is_favorite_processed(key: str) -> bool:
+    favs = load_processed_favorites()
+    return key.lower().strip() in favs
+
+def mark_favorite_processed(key: str):
+    favs = load_processed_favorites()
+    favs.add(key.lower().strip())
+    save_processed_favorites(favs)
+
 RECOMMENDED_ARTISTS_FILE = os.path.join(DATA_DIR, "recommended_artists.json")
+
 
 def load_recent_recommended_artists(retention_days: int = 30) -> dict:
     """
@@ -279,6 +327,8 @@ class SettingsUpdate(BaseModel):
     max_session_tracks: int | None = None # 0 = ilimitado, 10, 15, 20, 30
     plex_discovery_library: str | None = None # default: "Discover"
     plex_permanent_library: str | None = None # default: "Music"
+    auto_download_favorite_albums: bool | None = None
+    favorite_album_quality: str | None = None # "flac_16_44"
 
 @app.get("/api/settings")
 def get_settings():
@@ -307,7 +357,9 @@ def get_settings():
         "buffer_trigger": settings.get("BUFFER_TRIGGER", 2),
         "max_session_tracks": settings.get("MAX_SESSION_TRACKS", 20),
         "plex_discovery_library": settings.get("PLEX_DISCOVERY_LIBRARY", "Discover"),
-        "plex_permanent_library": settings.get("PLEX_PERMANENT_LIBRARY", "Music")
+        "plex_permanent_library": settings.get("PLEX_PERMANENT_LIBRARY", "Music"),
+        "auto_download_favorite_albums": settings.get("AUTO_DOWNLOAD_FAVORITE_ALBUMS", True),
+        "favorite_album_quality": settings.get("FAVORITE_ALBUM_QUALITY", "flac_16_44")
     }
 
 @app.post("/api/settings")
@@ -343,6 +395,10 @@ def update_settings(update: SettingsUpdate):
         settings["PLEX_DISCOVERY_LIBRARY"] = update.plex_discovery_library.strip()
     if update.plex_permanent_library is not None:
         settings["PLEX_PERMANENT_LIBRARY"] = update.plex_permanent_library.strip()
+    if update.auto_download_favorite_albums is not None:
+        settings["AUTO_DOWNLOAD_FAVORITE_ALBUMS"] = update.auto_download_favorite_albums
+    if update.favorite_album_quality is not None:
+        settings["FAVORITE_ALBUM_QUALITY"] = update.favorite_album_quality
     save_settings(settings)
     return {"status": "success"}
 
@@ -445,6 +501,8 @@ def _get_now_playing_data():
                 album_info = get_session_album_info(server, session)
                 thumb = album_info.get("thumb") or getattr(session, 'thumb', None) or getattr(session, 'parentThumb', None)
                 rating_key = str(getattr(session, 'ratingKey', ''))
+                user_rating = float(getattr(session, 'userRating', 0) or 0)
+                is_favorite = (user_rating >= 8.0)
                 return {
                     "is_playing": True,
                     "state": player_state,
@@ -457,6 +515,8 @@ def _get_now_playing_data():
                     "album_id": album_info.get("album_id"),
                     "play_queue_id": album_info.get("play_queue_id"),
                     "rating_key": rating_key,
+                    "user_rating": user_rating,
+                    "is_favorite": is_favorite,
                     "thumb": thumb,
                     "total_duration_ms": album_info.get("total_duration_ms", getattr(session, 'duration', 0)),
                     "elapsed_ms": album_info.get("elapsed_ms", getattr(session, 'viewOffset', 0)),
@@ -678,6 +738,82 @@ def promote_artist(req: PromoteArtistRequest):
         "message": f"Banda '{artist_name}' promovida com sucesso! {moved_count} ficheiros movidos para a biblioteca permanente.",
         "moved_files": moved_count
     }
+
+class FavoriteAlbumRequest(BaseModel):
+    artist: str
+    album: str | None = None
+    track: str | None = None
+
+@app.post("/api/favorite-album")
+async def favorite_album_endpoint(req: FavoriteAlbumRequest):
+    """
+    Aciona manualmente o download do álbum completo em FLAC 16-bit / 44.1 kHz.
+    """
+    if not req.artist.strip():
+        raise HTTPException(status_code=400, detail="Nome de artista inválido")
+    res = await trigger_favorite_album_download(req.artist, req.album or "", req.track or "", manual=True)
+    return res
+
+@app.get("/api/favorite-albums")
+def get_favorite_albums_endpoint():
+    """
+    Devolve a lista de álbuns favoritados e o respetivo estado de transferência em FLAC.
+    """
+    return load_album_downloads()
+
+@app.delete("/api/favorite-albums/{album_id}")
+def delete_favorite_album_endpoint(album_id: str):
+    """
+    Remove um álbum do registo de downloads.
+    """
+    dls = load_album_downloads()
+    dls = [d for d in dls if d.get("id") != album_id]
+    save_album_downloads(dls)
+    return {"status": "success"}
+
+@app.post("/api/plex-webhook")
+async def plex_webhook_endpoint(request: Request):
+    """
+    Recebe eventos webhook do Plex Media Server.
+    Quando deteta 'media.rate' numa faixa de áudio com avaliação >= 8.0 (ou favorita/coração),
+    dispara o download automático do álbum em FLAC 16/44 para a biblioteca definitiva.
+    """
+    try:
+        content_type = request.headers.get("content-type", "")
+        payload_data = None
+        if "multipart/form-data" in content_type:
+            form = await request.form()
+            payload_str = form.get("payload")
+            if payload_str:
+                payload_data = json.loads(payload_str)
+        else:
+            payload_data = await request.json()
+
+        if not payload_data:
+            return {"status": "ignored", "reason": "Sem payload"}
+
+        event = payload_data.get("event")
+        if event == "media.rate":
+            meta = payload_data.get("Metadata", {})
+            if meta.get("type") == "track":
+                rating_val = float(payload_data.get("rating") or meta.get("userRating") or 0)
+                if rating_val >= 8.0:
+                    artist = meta.get("grandparentTitle", "")
+                    album = meta.get("parentTitle", "")
+                    track = meta.get("title", "")
+                    settings = load_settings()
+                    if settings.get("AUTO_DOWNLOAD_FAVORITE_ALBUMS", True):
+                        fav_key = f"{artist} - {album or track}".lower()
+                        if not is_favorite_processed(fav_key):
+                            mark_favorite_processed(fav_key)
+                            print(f"Plex Webhook: Faixa favoritada ({rating_val}/10): {artist} - {track} ({album}). A iniciar download do álbum FLAC 16/44!")
+                            asyncio.create_task(trigger_favorite_album_download(artist, album, track))
+                            return {"status": "triggered", "artist": artist, "album": album}
+
+        return {"status": "ignored", "event": event}
+    except Exception as e:
+        print(f"Erro ao processar Plex Webhook: {e}")
+        return {"status": "error", "error": str(e)}
 
 from app.lastfm import LastFMClient
 
@@ -1154,11 +1290,15 @@ async def auto_pilot_loop():
 
 from app.importer import (
     lookup_musicbrainz,
+    lookup_musicbrainz_album,
     tag_audio_file,
+    tag_album_flac_file,
     validate_audio_file,
     organize_and_move_file,
+    organize_and_move_album,
     find_file_in_downloads,
-    trigger_plex_music_scan
+    trigger_plex_music_scan,
+    inspect_flac_audio_quality
 )
 from plexapi.playqueue import PlayQueue
 from plexapi.playlist import Playlist
@@ -1321,11 +1461,161 @@ async def process_and_import_file(local_file: str, artist_hint: str = "", title_
     update_queue_item_status(meta['artist'], meta['title'], "imported", "Guardado na biblioteca Discover", old_artist=artist_hint, old_title=title_hint)
     return meta
 
+async def trigger_favorite_album_download(artist: str, album: str = "", track_title: str = "", manual: bool = False) -> Dict:
+    """
+    Descarrega o álbum completo oficial em FLAC 16-bit / 44.1 kHz (qualidade CD)
+    para a biblioteca permanente do Plex quando uma música é favoritada.
+    """
+    artist_name = artist.strip() if artist else ""
+    album_name = album.strip() if album else ""
+    track_name = track_title.strip() if track_title else ""
+    
+    if not artist_name:
+        return {"status": "error", "message": "Nome do artista não fornecido"}
+
+    print(f"Favorito: A iniciar busca de álbum para '{artist_name}' - '{album_name or track_name}'")
+    
+    # 1. Obter metadados canónicos do álbum pelo MusicBrainz
+    mb_album = await lookup_musicbrainz_album(artist_name, album_name, track_name)
+    canonical_artist = mb_album.get("artist") or artist_name
+    canonical_album = mb_album.get("album") or album_name or "Álbum Desconhecido"
+    track_count = mb_album.get("track_count", 0)
+    year = mb_album.get("year", "")
+
+    # 2. Verificar se o álbum já existe na biblioteca permanente
+    clean_art = re.sub(r'[\\/*?:"<>|]', '', canonical_artist).strip()
+    clean_alb = re.sub(r'[\\/*?:"<>|]', '', canonical_album).strip()
+    dest_check = os.path.join("/music", clean_art, clean_alb)
+    if os.path.exists(dest_check):
+        existing_files = [f for f in os.listdir(dest_check) if f.lower().endswith(('.flac', '.mp3', '.m4a'))]
+        if len(existing_files) >= max(3, int(track_count * 0.7)):
+            print(f"Favorito: Álbum '{canonical_album}' de '{canonical_artist}' já existe em /music ({len(existing_files)} faixas).")
+            return {
+                "status": "already_exists",
+                "artist": canonical_artist,
+                "album": canonical_album,
+                "detail": f"Álbum já existe na biblioteca permanente ({len(existing_files)} faixas)",
+                "message": "Álbum já existe na coleção definitiva"
+            }
+
+    # 3. Verificar se já existe um download ativo para este álbum
+    album_downloads = load_album_downloads()
+    for item in album_downloads:
+        if item.get("artist", "").lower() == canonical_artist.lower() and item.get("album", "").lower() == canonical_album.lower():
+            if item.get("status") in ["searching", "downloading", "tagging", "completed"]:
+                print(f"Favorito: Download do álbum '{canonical_album}' já registado ({item.get('status')})")
+                return item
+
+    # 4. Criar registo de download pendente
+    album_id = str(uuid.uuid4())
+    item_record = {
+        "id": album_id,
+        "artist": canonical_artist,
+        "album": canonical_album,
+        "year": year,
+        "track_title": track_name,
+        "status": "searching",
+        "detail": "A pesquisar versões FLAC 16-bit / 44.1 kHz no Soulseek...",
+        "total_tracks": track_count,
+        "completed_tracks": 0,
+        "files": [],
+        "musicbrainz": mb_album,
+        "created_at": time.time(),
+        "updated_at": time.time()
+    }
+    album_downloads.insert(0, item_record)
+    save_album_downloads(album_downloads)
+
+    # 5. Iniciar pesquisa no slskd
+    settings = load_settings()
+    slskd_url = settings.get("SLSKD_URL") or os.environ.get("SLSKD_URL")
+    slskd_key = settings.get("SLSKD_API_KEY") or os.environ.get("SLSKD_API_KEY")
+    if not slskd_url or not slskd_key:
+        item_record["status"] = "error"
+        item_record["detail"] = "slskd não configurado"
+        item_record["updated_at"] = time.time()
+        save_album_downloads(album_downloads)
+        return item_record
+
+    client = SlskdClient(url=slskd_url, api_key=slskd_key)
+    candidate = await client.search_album(canonical_artist, canonical_album, expected_track_count=track_count)
+    if not candidate:
+        item_record["status"] = "error"
+        item_record["detail"] = "Nenhuma versão FLAC 16/44 encontrada no Soulseek"
+        item_record["updated_at"] = time.time()
+        save_album_downloads(album_downloads)
+        return item_record
+
+    # 6. Agendar transferência em lote no slskd
+    username = candidate.get("username")
+    cand_files = candidate.get("files", [])
+    
+    item_record["username"] = username
+    item_record["folder"] = candidate.get("folder", "")
+    item_record["total_tracks"] = len(cand_files)
+    item_record["files"] = [
+        {
+            "filename": f["filename"],
+            "base_name": os.path.basename(f["filename"].replace('\\', '/')).lower(),
+            "size": f.get("size", 0),
+            "bitrate": f.get("bitrate", 0),
+            "state": "Queued",
+            "is_cd_quality": False,
+            "quality_desc": ""
+        }
+        for f in cand_files
+    ]
+    item_record["status"] = "downloading"
+    item_record["detail"] = f"A descarregar de {username} ({len(cand_files)} faixas em FLAC)"
+    item_record["updated_at"] = time.time()
+    save_album_downloads(album_downloads)
+
+    queued = await client.download_batch(username, cand_files)
+    if not queued:
+        item_record["status"] = "error"
+        item_record["detail"] = f"Falha ao enviar pedido de download ao slskd ({username})"
+        item_record["updated_at"] = time.time()
+        save_album_downloads(album_downloads)
+        return item_record
+
+    print(f"Favorito: {len(cand_files)} faixas do álbum '{canonical_album}' agendadas com sucesso no slskd!")
+    return item_record
+
+async def favorite_monitor_loop():
+    """
+    Monitoriza a reprodução no Plexamp a cada 12 segundos.
+    Quando uma faixa é favoritada (userRating >= 8.0 ou coração),
+    aciona automaticamente o download do álbum completo em FLAC 16-bit / 44.1 kHz.
+    """
+    while True:
+        await asyncio.sleep(12)
+        try:
+            settings = load_settings()
+            if not settings.get("AUTO_DOWNLOAD_FAVORITE_ALBUMS", True):
+                continue
+
+            now_data = _get_now_playing_data()
+            if not now_data.get("is_playing"):
+                continue
+
+            user_rating = now_data.get("user_rating", 0)
+            if user_rating >= 8.0:
+                artist = now_data.get("artist")
+                album = now_data.get("album")
+                track = now_data.get("track")
+                if artist:
+                    fav_key = f"{artist} - {album or track}".lower()
+                    if not is_favorite_processed(fav_key):
+                        mark_favorite_processed(fav_key)
+                        print(f"Favorito detetado no Plexamp ({user_rating}/10): {artist} - {track} ({album}). A iniciar download do álbum FLAC 16/44!")
+                        asyncio.create_task(trigger_favorite_album_download(artist, album or "", track or ""))
+        except Exception:
+            pass
+
 async def auto_import_loop():
     """
     Monitoriza o slskd e a pasta de downloads de 20 em 20 segundos por transferências concluídas.
-    Aplica tags do MusicBrainz, move para /music_discovery, atualiza o Plex,
-    injeta na PlayQueue ativa do Plexamp e atualiza a Playlist PlexDiscover.
+    Reconcilia faixas normais de descoberta e álbuns completos favoritos em FLAC 16/44.
     """
     while True:
         await asyncio.sleep(20)
@@ -1393,6 +1683,67 @@ async def auto_import_loop():
                                     newly_imported_metas.append(meta)
                                     imported_any = True
 
+            # 1.5 Processar Transferências de Álbuns Completos em FLAC 16/44
+            album_downloads = load_album_downloads()
+            album_updated = False
+            for album in album_downloads:
+                if album.get("status") != "downloading":
+                    continue
+
+                files = album.get("files", [])
+                for f in files:
+                    if f.get("state") == "Completed, Succeeded":
+                        continue
+                    base_name = f.get("base_name", "").lower()
+                    local_file = find_file_in_downloads(base_name)
+                    if local_file and os.path.exists(local_file):
+                        f["state"] = "Completed, Succeeded"
+                        f["local_path"] = local_file
+                        q_info = inspect_flac_audio_quality(local_file)
+                        f["is_cd_quality"] = q_info.get("is_cd_quality", False)
+                        f["quality_desc"] = q_info.get("description", "")
+                        album_updated = True
+
+                completed_count = sum(1 for f in files if f.get("state") == "Completed, Succeeded")
+                album["completed_tracks"] = completed_count
+                total_count = album.get("total_tracks", len(files))
+                album["detail"] = f"{completed_count}/{total_count} faixas transferidas"
+
+                ready_files = [f.get("local_path") for f in files if f.get("local_path") and os.path.exists(f.get("local_path"))]
+                is_finished = (completed_count >= total_count) or (total_count > 0 and completed_count >= int(total_count * 0.85) and not any(
+                    any(os.path.basename(tr_f.get("filename", "")).lower() in [f.get("base_name") for f in files if f.get("state") != "Completed, Succeeded"]
+                        for tr_f in d.get("files", []))
+                    for ut in transfers for d in ut.get("directories", [])
+                ))
+
+                if is_finished and len(ready_files) >= max(3, int(total_count * 0.7)):
+                    print(f"Auto-import Álbum: Álbum '{album.get('artist')} - {album.get('album')}' pronto para importar ({len(ready_files)} faixas)!")
+                    album["status"] = "tagging"
+                    album["detail"] = "A validar áudio e a aplicar tags oficiais do MusicBrainz..."
+                    save_album_downloads(album_downloads)
+
+                    mb_album = album.get("musicbrainz", {})
+                    dest_folder = organize_and_move_album(ready_files, mb_album, mb_album.get("tracks", []), dest_base="/music")
+
+                    album["status"] = "completed"
+                    cd_count = sum(1 for f in files if f.get("is_cd_quality"))
+                    album["detail"] = f"Guardado na Coleção Permanente ({len(ready_files)} faixas, FLAC 16-bit / 44.1 kHz)"
+                    album["dest_folder"] = dest_folder
+                    album_updated = True
+
+                    token = settings.get("PLEX_TOKEN")
+                    if token:
+                        try:
+                            server = get_plex_server(token)
+                            perm_lib = settings.get("PLEX_PERMANENT_LIBRARY", "Music")
+                            trigger_plex_music_scan(server, library_name=perm_lib)
+                            print(f"Scan à biblioteca permanente '{perm_lib}' do Plex acionado para o álbum {album.get('album')}!")
+                        except Exception as px_err:
+                            print(f"Aviso ao acionar scan ao Plex para álbum permanente: {px_err}")
+
+            if album_updated:
+                save_album_downloads(album_downloads)
+
             # 2. Reconciliação direta de pending_downloads (ficheiros já no disco ou downloads que expiraram)
             pending_downloads = load_pending_downloads()
             now_ts = time.time()
@@ -1425,10 +1776,20 @@ async def auto_import_loop():
                     pending_downloads.pop(k, None)
                 save_pending_downloads(pending_downloads)
 
-            # 3. Varrer a pasta /downloads por ficheiros de áudio prontos (que já não estão em transferência ativa)
+            # 3. Varrer a pasta /downloads por ficheiros de áudio prontos (que não pertencem a álbuns ativos)
+            album_active_basenames = {
+                f.get("base_name")
+                for alb in load_album_downloads()
+                if alb.get("status") in ["searching", "downloading", "tagging"]
+                for f in alb.get("files", [])
+                if f.get("base_name")
+            }
+
             if os.path.exists("/downloads"):
                 for p_audio in list(Path("/downloads").rglob("*")):
                     if p_audio.is_file() and p_audio.suffix.lower() in [".flac", ".mp3", ".m4a", ".ogg"]:
+                        if p_audio.name.lower() in album_active_basenames:
+                            continue
                         is_active_dl = any(
                             any(os.path.basename(f.get("filename", "")).lower() == p_audio.name.lower() for f in d.get("files", []))
                             for ut in transfers for d in ut.get("directories", [])
@@ -1601,3 +1962,5 @@ async def startup_event():
     asyncio.create_task(auto_pilot_loop())
     asyncio.create_task(auto_import_loop())
     asyncio.create_task(auto_cleanup_loop())
+    asyncio.create_task(favorite_monitor_loop())
+

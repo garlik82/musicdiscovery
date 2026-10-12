@@ -71,6 +71,9 @@
                 <p class="track-artist">👤 <strong>{{ nowPlaying.artist }}</strong></p>
                 <p class="track-album">💿 {{ nowPlaying.album }}</p>
                 <p class="meta">Dispositivo: <strong>{{ nowPlaying.player }}</strong> ({{ nowPlaying.user }})</p>
+                <div v-if="nowPlaying.is_favorite" class="favorite-indicator-badge">
+                  ⭐ Marcada como Favorita no Plexamp
+                </div>
 
                 <!-- Barra de Progresso do Álbum / Tempo Restante -->
                 <div v-if="nowPlaying.is_album && nowPlaying.total_duration_ms > 0" class="album-progress-box">
@@ -96,6 +99,14 @@
                 <div class="actions-row">
                   <button class="btn btn-sm" @click="discover(nowPlaying.artist)" :disabled="isDiscovering">
                     {{ isDiscovering ? 'A procurar...' : '🔍 Descobrir Manualmente' }}
+                  </button>
+                  <button 
+                    class="btn btn-sm btn-fav-album" 
+                    @click="favoriteAlbum(nowPlaying.artist, nowPlaying.album, nowPlaying.track)" 
+                    :disabled="isFavoriting"
+                    title="Pesquisa e descarrega o álbum completo em FLAC 16-bit / 44.1 kHz via slskd para a biblioteca permanente (/music)"
+                  >
+                    {{ isFavoriting ? '⏳ A agendar...' : '💿 Sacar Álbum FLAC (16/44)' }}
                   </button>
                 </div>
               </div>
@@ -145,6 +156,13 @@
                 </div>
                 <div class="queue-actions">
                   <button 
+                    @click="favoriteAlbum(item.artist, '', item.title)" 
+                    class="btn-action btn-album-fav" 
+                    title="Baixar álbum completo em FLAC 16/44 para a biblioteca permanente"
+                  >
+                    💿 Álbum FLAC
+                  </button>
+                  <button 
                     v-if="item.status === 'imported' || item.status === 'injected'" 
                     @click="promoteArtist(item.artist)" 
                     class="btn-action btn-promote" 
@@ -164,6 +182,64 @@
             </div>
           </div>
         </div>
+
+        <!-- Card de Álbuns Favoritados / Transferências FLAC 16/44 -->
+        <div v-if="favoriteAlbums && favoriteAlbums.length > 0" class="discovery-card album-downloads-card">
+          <div class="card-header">
+            <div>
+              <h3>💿 Álbuns Favoritos & Downloads FLAC (16-bit / 44.1 kHz)</h3>
+              <p class="subtitle" style="margin-top: 2px;">
+                Álbuns completos descarregados em qualidade CD diretamente para a tua biblioteca permanente (/music)
+              </p>
+            </div>
+            <span class="badge badge-cd-count">{{ favoriteAlbums.length }} {{ favoriteAlbums.length === 1 ? 'álbum' : 'álbuns' }}</span>
+          </div>
+
+          <div class="album-cards-grid">
+            <div v-for="alb in favoriteAlbums" :key="alb.id" class="album-item-card">
+              <div class="album-item-top">
+                <div class="album-meta-info">
+                  <strong class="alb-artist">{{ alb.artist }}</strong>
+                  <h4 class="alb-title">{{ alb.album }} <span v-if="alb.year" class="alb-year">({{ alb.year }})</span></h4>
+                  <div class="alb-detail">{{ alb.detail }}</div>
+                </div>
+
+                <div class="alb-status-wrapper">
+                  <span v-if="alb.status === 'searching'" class="badge badge-searching">🔍 A pesquisar no Soulseek...</span>
+                  <span v-else-if="alb.status === 'downloading'" class="badge badge-downloading">⏳ A transferir ({{ alb.completed_tracks }}/{{ alb.total_tracks }})</span>
+                  <span v-else-if="alb.status === 'tagging'" class="badge badge-tagging">🏷️ A etiquetar & verificar</span>
+                  <span v-else-if="alb.status === 'completed'" class="badge badge-imported">✅ Guardado (/music)</span>
+                  <span v-else-if="alb.status === 'already_exists'" class="badge badge-imported">✓ Já existente</span>
+                  <span v-else-if="alb.status === 'error'" class="badge badge-error">❌ Erro</span>
+                  <span v-else class="badge pending">Pendente</span>
+
+                  <button 
+                    @click="removeFavoriteAlbum(alb.id)" 
+                    class="btn-delete-alb" 
+                    title="Remover do histórico"
+                  >
+                    ✕
+                  </button>
+                </div>
+              </div>
+
+              <!-- Barra de progresso para downloads ativos -->
+              <div v-if="alb.status === 'downloading' && alb.total_tracks > 0" class="album-progress-bar-container">
+                <div 
+                  class="album-progress-bar-fill" 
+                  :style="{ width: `${Math.min(100, Math.round((alb.completed_tracks / alb.total_tracks) * 100))}%` }"
+                ></div>
+                <span class="album-progress-text">{{ Math.round((alb.completed_tracks / alb.total_tracks) * 100) }}% ({{ alb.completed_tracks }}/{{ alb.total_tracks }} faixas)</span>
+              </div>
+
+              <div class="album-item-footer">
+                <span class="badge-quality-flac">FLAC 16-bit / 44.1 kHz (CD Red Book)</span>
+                <span v-if="alb.username" class="alb-user-tag">Soulseek: {{ alb.username }}</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
 
         <!-- Card de Recomendações Manuais Last.fm (quando feito clique manual) -->
         <div v-if="discoveryResults" class="discovery-card">
@@ -224,6 +300,60 @@ const discoveryResults = ref(null)
 const discoveryQueue = ref([])
 const ignoredArtists = ref([])
 let queueInterval = null
+
+const favoriteAlbums = ref([])
+const isFavoriting = ref(false)
+
+async function fetchFavoriteAlbums() {
+  try {
+    const res = await fetch(`${API_BASE}/favorite-albums`)
+    if (res.ok) {
+      favoriteAlbums.value = await res.json()
+    }
+  } catch (e) {
+    console.error("Erro ao carregar álbuns favoritos:", e)
+  }
+}
+
+async function favoriteAlbum(artistName, albumName = '', trackTitle = '') {
+  if (!artistName) return
+  isFavoriting.value = true
+  try {
+    const res = await fetch(`${API_BASE}/favorite-album`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        artist: artistName,
+        album: albumName || '',
+        track: trackTitle || ''
+      })
+    })
+    const data = await res.json()
+    if (res.ok) {
+      await fetchFavoriteAlbums()
+      alert(`⭐ Pedido registado: O PlexDiscover está à procura do álbum completo de "${artistName}" em FLAC 16/44 no Soulseek!`)
+    } else {
+      alert(`Erro: ${data.detail || data.message || 'Falha ao agendar álbum.'}`)
+    }
+  } catch (e) {
+    alert("Erro de comunicação ao agendar download do álbum.")
+  } finally {
+    isFavoriting.value = false
+  }
+}
+
+async function removeFavoriteAlbum(albumId) {
+  try {
+    const res = await fetch(`${API_BASE}/favorite-albums/${encodeURIComponent(albumId)}`, {
+      method: 'DELETE'
+    })
+    if (res.ok) {
+      await fetchFavoriteAlbums()
+    }
+  } catch (e) {
+    console.error("Erro ao remover álbum favorito:", e)
+  }
+}
 
 async function fetchIgnoredArtists() {
   try {
@@ -458,15 +588,19 @@ async function checkSettings() {
   }
 }
 
-// Verifica o que está a tocar e a fila a cada 4 segundos
+// Verifica o que está a tocar, a fila e os álbuns favoritos a cada 4 segundos
 function startNowPlayingPolling() {
   fetchNowPlaying()
   fetchDiscoveryQueue()
+  fetchFavoriteAlbums()
   if (nowPlayingInterval) clearInterval(nowPlayingInterval)
   nowPlayingInterval = setInterval(fetchNowPlaying, 4000)
   
   if (queueInterval) clearInterval(queueInterval)
-  queueInterval = setInterval(fetchDiscoveryQueue, 4000)
+  queueInterval = setInterval(() => {
+    fetchDiscoveryQueue()
+    fetchFavoriteAlbums()
+  }, 4000)
 }
 
 async function fetchNowPlaying() {
@@ -904,5 +1038,173 @@ h1 { color: #e5a00d; }
   border-color: #0066cc;
   color: white;
   box-shadow: 0 4px 12px rgba(0, 102, 204, 0.25);
+}
+
+/* Indicador e Botão de Álbum Favorito */
+.favorite-indicator-badge {
+  background: #fff8e1;
+  color: #b78103;
+  border: 1px solid #ffe082;
+  padding: 4px 10px;
+  border-radius: 6px;
+  font-weight: 600;
+  font-size: 13px;
+  display: inline-block;
+  margin-top: 6px;
+}
+.btn-fav-album {
+  background: #7c3aed;
+  color: white;
+  border: none;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+.btn-fav-album:hover:not(:disabled) {
+  background: #6d28d9;
+  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3);
+}
+.btn-fav-album:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+.btn-album-fav {
+  background: #ede9fe;
+  color: #6d28d9;
+  border-color: #ddd6fe;
+}
+.btn-album-fav:hover {
+  background: #ddd6fe;
+  color: #5b21b6;
+}
+
+/* Cartão de Downloads de Álbuns em FLAC */
+.album-downloads-card {
+  margin-top: 20px;
+}
+.badge-cd-count {
+  background: #e0e7ff;
+  color: #4338ca;
+  padding: 4px 10px;
+  border-radius: 12px;
+  font-size: 12px;
+  font-weight: 600;
+}
+.album-cards-grid {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 14px;
+}
+.album-item-card {
+  background: #f8fafc;
+  border: 1px solid #e2e8f0;
+  border-radius: 8px;
+  padding: 14px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  transition: all 0.2s ease;
+}
+.album-item-card:hover {
+  border-color: #cbd5e1;
+  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+}
+.album-item-top {
+  display: flex;
+  justify-content: space-between;
+  align-items: flex-start;
+  gap: 12px;
+}
+.album-meta-info {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.alb-artist {
+  color: #64748b;
+  font-size: 12px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+.alb-title {
+  margin: 0;
+  font-size: 16px;
+  color: #1e293b;
+  font-weight: 700;
+}
+.alb-year {
+  color: #94a3b8;
+  font-weight: 400;
+  font-size: 14px;
+}
+.alb-detail {
+  font-size: 13px;
+  color: #475569;
+  margin-top: 2px;
+}
+.alb-status-wrapper {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.btn-delete-alb {
+  background: none;
+  border: none;
+  color: #94a3b8;
+  font-size: 14px;
+  cursor: pointer;
+  padding: 4px 8px;
+  border-radius: 4px;
+  transition: all 0.2s;
+}
+.btn-delete-alb:hover {
+  color: #ef4444;
+  background: #fee2e2;
+}
+.album-progress-bar-container {
+  position: relative;
+  height: 18px;
+  background: #e2e8f0;
+  border-radius: 9px;
+  overflow: hidden;
+  display: flex;
+  align-items: center;
+}
+.album-progress-bar-fill {
+  height: 100%;
+  background: linear-gradient(90deg, #6366f1, #8b5cf6);
+  border-radius: 9px;
+  transition: width 0.4s ease;
+}
+.album-progress-text {
+  position: absolute;
+  width: 100%;
+  text-align: center;
+  font-size: 11px;
+  font-weight: 700;
+  color: #1e293b;
+  text-shadow: 0 0 2px rgba(255, 255, 255, 0.8);
+}
+.album-item-footer {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  font-size: 12px;
+  padding-top: 4px;
+  border-top: 1px solid #f1f5f9;
+}
+.badge-quality-flac {
+  background: #ecfdf5;
+  color: #047857;
+  border: 1px solid #a7f3d0;
+  padding: 2px 8px;
+  border-radius: 4px;
+  font-weight: 600;
+  font-size: 11px;
+}
+.alb-user-tag {
+  color: #64748b;
+  font-size: 12px;
 }
 </style>

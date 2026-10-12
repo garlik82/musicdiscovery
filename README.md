@@ -15,13 +15,14 @@ Enquanto ouves os teus álbuns favoritos, o PlexDiscover analisa os teus gostos,
 * 🛡️ **Proteção Total da Biblioteca Permanente:** A tua coleção principal (`/music`) nunca é alterada. As descobertas são gravadas num volume isolado (`/music_discovery`), com uma biblioteca dedicada no Plex (*Music Discovery*).
 * 🏷️ **Etiquetagem Oficial MusicBrainz:** Todos os ficheiros transferidos são validados (integridade áudio e duração) e recebem tags ID3/FLAC oficiais antes de serem indexados pelo Plex.
 * 🔍 **Integração Soulseek (slskd) Robusta:** Pesquisa automática, seleção da melhor qualidade disponível (FLAC/MP3 320kbps), reconciliação direta com o sistema de ficheiros e recuperação de downloads pendentes.
-* ⭐ **Promoção & Lista Negra:**
+* ⭐ **Promoção & Álbuns Favoritos:**
+  * **Download Automático de Álbum Completo (FLAC 16-bit / 44.1 kHz):** Quando marcas uma música como favorita (⭐ ou ❤️) no Plexamp ou via Webhook do Plex, o PlexDiscover pesquisa e descarrega o álbum de estúdio completo em qualidade CD Red Book diretamente para a tua biblioteca definitiva (`/music`), aplicando metadados oficiais do MusicBrainz.
   * **Promover Artista:** Move com um clique os ficheiros da biblioteca de descoberta para a tua coleção definitiva.
   * **Lista Negra:** Ignora artistas que não queiras voltar a ouvir.
 * 🧹 **Limpeza Automática & Manual:**
   * **Auto-Cleanup (1 hora):** Se a reprodução parar e passarem 60 minutos de inatividade, remove automaticamente as faixas temporárias e purga a biblioteca do Plex.
   * **Botão de Limpeza Manual:** Disponível no separador de Definições para limpar a biblioteca de descoberta e registos a qualquer momento.
-* 💻 **Interface Moderna (Vue 3 + Tailwind):** Dashboard em tempo real com estado do reprodutor, fila de descoberta, barra de buffer ao vivo, pesquisa manual e painel de definições.
+* 💻 **Interface Moderna (Vue 3):** Dashboard em tempo real com estado do reprodutor, fila de descoberta, gestão de transferências de álbuns FLAC, pesquisa manual e painel de definições.
 
 ---
 
@@ -131,3 +132,4 @@ Todas as configurações podem ser ajustadas em tempo real na interface web no s
 ## 📄 Licença
 
 Distribuído sob a licença MIT. Consulta o ficheiro `LICENSE` para mais informações.
+
