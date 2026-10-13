@@ -99,7 +99,7 @@
           
           <div v-if="nowPlaying" class="track-info">
             <div v-if="nowPlaying.is_playing" class="player-layout">
-              <!-- Capa do Álbum com Efeito Vinil 3D -->
+              <!-- Capa do Álbum Limpa Hi-Fi -->
               <div class="album-art-wrapper">
                 <img 
                   v-if="nowPlaying.thumb" 
@@ -108,7 +108,6 @@
                   class="album-art" 
                 />
                 <div v-else class="album-art-placeholder">🎵</div>
-                <div :class="['vinyl-disc', { 'paused': nowPlaying.state === 'paused' }]">💿</div>
               </div>
 
               <!-- Detalhes da Faixa e Álbum -->
@@ -145,7 +144,10 @@
                   <button class="btn btn-glass" @click="discover(nowPlaying.artist)" :disabled="isDiscovering">
                     {{ isDiscovering ? '⏳ A pesquisar...' : '🔍 Descobrir Semelhantes' }}
                   </button>
+
+                  <!-- Só exibe o botão de sacar álbum se ainda NÃO estiver na biblioteca permanente -->
                   <button 
+                    v-if="!nowPlaying.already_in_library"
                     class="btn btn-hifi" 
                     @click="favoriteAlbum(nowPlaying.artist, nowPlaying.album, nowPlaying.track)" 
                     :disabled="isFavoriting"
@@ -153,6 +155,9 @@
                   >
                     {{ isFavoriting ? '⏳ A agendar...' : '💿 Sacar Álbum FLAC (16/44)' }}
                   </button>
+                  <div v-else class="badge-in-library" title="Este álbum já faz parte da tua coleção permanente (/music)">
+                    ✓ Na Tua Biblioteca Permanente
+                  </div>
                 </div>
               </div>
             </div>
@@ -287,22 +292,51 @@
 
 
         <!-- Card de Recomendações Manuais Last.fm (quando feito clique manual) -->
-        <div v-if="discoveryResults" class="discovery-card">
-          <h3>Recomendações Manuais (Last.fm)</h3>
-          <p class="subtitle">Com base em: <strong>{{ discoveryResults.source_artist }}</strong></p>
+        <div v-if="discoveryResults" class="discovery-card rec-card">
+          <div class="card-header">
+            <div>
+              <h3>🔍 Recomendações de Bandas Novas</h3>
+              <p class="subtitle" style="margin-top: 2px;">
+                Semelhantes a <strong>{{ discoveryResults.source_artist }}</strong> (excluindo bandas que já tens na biblioteca • 1 música por banda)
+              </p>
+            </div>
+            <button @click="discoveryResults = null" class="btn-text">✕ Fechar</button>
+          </div>
           
-          <div class="playlist">
-            <div v-for="(track, index) in discoveryResults.playlist" :key="index" class="track-item">
-              <div class="track-details">
-                <strong>{{ track.artist }}</strong> - {{ track.title }}
+          <div v-if="discoveryResults.playlist && discoveryResults.playlist.length > 0" class="rec-list">
+            <div v-for="(track, index) in discoveryResults.playlist" :key="index" class="rec-item">
+              <div class="rec-art-box">
+                <img v-if="track.image" :src="track.image" alt="Capa" class="rec-thumb" />
+                <div v-else class="rec-thumb-placeholder">🎵</div>
               </div>
-              <div class="track-status">
-                <button v-if="!track.status || track.status === 'pending'" @click="downloadTrack(track)" class="btn btn-sm">Descarregar</button>
-                <span v-else-if="track.status === 'downloading'" class="badge pending">⏳ A procurar...</span>
-                <span v-else-if="track.status === 'success'" class="badge success">✅ Agendado</span>
-                <span v-else-if="track.status === 'error'" class="badge error">❌ Erro / Não Encontrado</span>
+              <div class="rec-details">
+                <strong class="rec-artist">{{ track.artist }}</strong>
+                <span class="rec-track-title">{{ track.title }}</span>
+              </div>
+              <div class="rec-actions">
+                <button 
+                  v-if="!track.status || track.status === 'pending'" 
+                  @click="downloadTrack(track)" 
+                  class="btn-action btn-hifi"
+                  title="Descarregar esta faixa para a fila de descoberta"
+                >
+                  ⚡ Descarregar Faixa
+                </button>
+                <button 
+                  @click="favoriteAlbum(track.artist, '', track.title)" 
+                  class="btn-action btn-album-fav" 
+                  title="Descarregar o álbum completo em FLAC 16/44 para a tua biblioteca permanente (/music)"
+                >
+                  💿 Álbum FLAC
+                </button>
+                <span v-if="track.status === 'downloading'" class="badge badge-downloading">⏳ A procurar...</span>
+                <span v-else-if="track.status === 'success'" class="badge badge-imported">✅ Agendado</span>
+                <span v-else-if="track.status === 'error'" class="badge badge-error">❌ Erro</span>
               </div>
             </div>
+          </div>
+          <div v-else class="empty-rec">
+            <p>Todas as bandas mais semelhantes já fazem parte da tua biblioteca permanente!</p>
           </div>
         </div>
       </div>
@@ -1113,22 +1147,6 @@ onMounted(() => {
   border: 1px solid var(--border-subtle);
 }
 
-.vinyl-disc {
-  position: absolute;
-  top: 15px;
-  right: -24px;
-  font-size: 110px;
-  line-height: 1;
-  z-index: 1;
-  opacity: 0.85;
-  filter: drop-shadow(0 4px 14px rgba(0, 0, 0, 0.7));
-  animation: spin 6s linear infinite;
-}
-
-.vinyl-disc.paused {
-  animation-play-state: paused;
-  opacity: 0.45;
-}
 
 .player-details {
   flex-grow: 1;
@@ -1637,46 +1655,106 @@ onMounted(() => {
   font-family: var(--font-mono);
 }
 
-/* Playlist & Manual Discovery */
-.playlist {
-  margin-top: 16px;
-  display: flex;
-  flex-direction: column;
-  gap: 8px;
+/* In Library Badge */
+.badge-in-library {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(16, 185, 129, 0.12);
+  border: 1px solid rgba(52, 211, 153, 0.4);
+  color: #34d399;
+  padding: 8px 16px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.01em;
 }
 
-.track-item {
+/* Playlist & Manual Discovery */
+.rec-card {
+  margin-top: 24px;
+}
+
+.rec-list {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  margin-top: 16px;
+}
+
+.rec-item {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 12px 16px;
+  padding: 12px 18px;
   background: rgba(18, 20, 32, 0.7);
   border: 1px solid var(--border-subtle);
   border-radius: var(--radius-md);
-}
-
-.track-details {
-  font-size: 14px;
-}
-
-.track-details strong {
-  color: var(--text-primary);
-}
-
-.btn-sm {
-  background: rgba(255, 255, 255, 0.08);
-  border: 1px solid var(--border-subtle);
-  color: var(--text-primary);
-  padding: 6px 14px;
-  border-radius: var(--radius-sm);
-  font-size: 12px;
-  font-weight: 600;
-  cursor: pointer;
+  gap: 16px;
+  flex-wrap: wrap;
   transition: all 0.2s ease;
 }
 
-.btn-sm:hover {
-  background: var(--accent-plex);
-  color: #000;
+.rec-item:hover {
+  background: rgba(26, 30, 48, 0.85);
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.rec-art-box {
+  width: 54px;
+  height: 54px;
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  flex-shrink: 0;
+  border: 1px solid var(--border-subtle);
+  background: var(--bg-surface-elevated);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.rec-thumb {
+  width: 100%;
+  height: 100%;
+  object-fit: cover;
+}
+
+.rec-thumb-placeholder {
+  font-size: 22px;
+  color: var(--text-muted);
+}
+
+.rec-details {
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  flex: 1;
+  min-width: 180px;
+}
+
+.rec-artist {
+  color: var(--accent-plex);
+  font-size: 14px;
+  font-weight: 700;
+}
+
+.rec-track-title {
+  color: var(--text-primary);
+  font-size: 14px;
+}
+
+.rec-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.empty-rec {
+  padding: 28px;
+  text-align: center;
+  color: var(--text-secondary);
+  font-size: 14px;
+  font-style: italic;
 }
 </style>

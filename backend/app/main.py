@@ -485,6 +485,115 @@ def get_session_album_info(server, session):
         print(f"Erro ao verificar origem no Plex: {e}")
     return {'is_album': False}
 
+def is_artist_in_permanent_library(server, artist_name: str) -> bool:
+    if not server or not artist_name:
+        return False
+    try:
+        settings = load_settings()
+        perm_lib = settings.get("PLEX_PERMANENT_LIBRARY", "Music")
+        try:
+            music = server.library.section(perm_lib)
+        except Exception:
+            music = server.library.section('Music')
+            
+        matches = music.searchArtists(title=artist_name)
+        clean_target = re.sub(r'[^\w]', '', artist_name.lower())
+        for a in matches:
+            clean_match = re.sub(r'[^\w]', '', a.title.lower())
+            if clean_match == clean_target:
+                # Verificar se tem faixas na biblioteca permanente (fora das pastas de descoberta)
+                for t in a.tracks()[:5]:
+                    for m in getattr(t, 'media', []):
+                        for p in getattr(m, 'parts', []):
+                            p_file = p.file.lower()
+                            if 'musicdiscovery' not in p_file and 'playlistdiscovery' not in p_file and '/discovery' not in p_file:
+                                return True
+    except Exception as e:
+        print(f"Erro ao verificar artista no Plex: {e}")
+    return False
+
+def is_track_in_permanent_library(server, artist_name: str, title: str) -> bool:
+    if not server or not title:
+        return False
+    try:
+        settings = load_settings()
+        perm_lib = settings.get("PLEX_PERMANENT_LIBRARY", "Music")
+        try:
+            music = server.library.section(perm_lib)
+        except Exception:
+            music = server.library.section('Music')
+
+        matches = music.searchTracks(title=title)
+        clean_title = re.sub(r'[^\w]', '', title.lower())
+        clean_artist = re.sub(r'[^\w]', '', artist_name.lower()) if artist_name else ""
+        for t in matches:
+            clean_match_title = re.sub(r'[^\w]', '', t.title.lower())
+            clean_match_artist = re.sub(r'[^\w]', '', getattr(t, 'grandparentTitle', '').lower())
+            if clean_match_title == clean_title and (not clean_artist or clean_artist in clean_match_artist or clean_match_artist in clean_artist):
+                for m in getattr(t, 'media', []):
+                    for p in getattr(m, 'parts', []):
+                        p_file = p.file.lower()
+                        if 'musicdiscovery' not in p_file and 'playlistdiscovery' not in p_file and '/discovery' not in p_file:
+                            return True
+    except Exception:
+        pass
+    return False
+
+def is_artist_already_owned(server, artist_name: str) -> bool:
+    if not artist_name:
+        return False
+    clean_target = re.sub(r'[^\w]', '', artist_name.lower())
+    if os.path.exists("/music"):
+        try:
+            for art_dir in os.listdir("/music"):
+                if re.sub(r'[^\w]', '', art_dir.lower()) == clean_target:
+                    return True
+        except Exception:
+            pass
+    if server:
+        try:
+            if is_artist_in_permanent_library(server, artist_name):
+                return True
+        except Exception:
+            pass
+    return False
+
+def is_album_already_owned(server, artist_name: str, album_name: str) -> bool:
+    if not artist_name or not album_name:
+        return False
+    clean_art = re.sub(r'[^\w]', '', artist_name.lower())
+    clean_alb = re.sub(r'[^\w]', '', album_name.lower())
+    if os.path.exists("/music"):
+        try:
+            for art_dir in os.listdir("/music"):
+                if re.sub(r'[^\w]', '', art_dir.lower()) == clean_art:
+                    art_path = os.path.join("/music", art_dir)
+                    if os.path.isdir(art_path):
+                        for alb_dir in os.listdir(art_path):
+                            clean_existing = re.sub(r'\[\d{4}\]', '', alb_dir)
+                            clean_existing = re.sub(r'[^\w]', '', clean_existing.lower())
+                            if clean_alb == clean_existing or clean_alb in clean_existing or clean_existing in clean_alb:
+                                return True
+        except Exception:
+            pass
+    if server:
+        try:
+            settings = load_settings()
+            perm_lib = settings.get("PLEX_PERMANENT_LIBRARY", "Music")
+            try:
+                music = server.library.section(perm_lib)
+            except Exception:
+                music = server.library.section('Music')
+            matches = music.searchAlbums(title=album_name)
+            for alb in matches:
+                clean_match_alb = re.sub(r'[^\w]', '', alb.title.lower())
+                clean_match_art = re.sub(r'[^\w]', '', getattr(alb, 'artistTitle', getattr(alb, 'parentTitle', '')).lower())
+                if clean_alb == clean_match_alb and (clean_art in clean_match_art or clean_match_art in clean_art):
+                    return True
+        except Exception:
+            pass
+    return False
+
 def _get_now_playing_data():
     settings = load_settings()
     token = settings.get("PLEX_TOKEN")
@@ -503,6 +612,23 @@ def _get_now_playing_data():
                 rating_key = str(getattr(session, 'ratingKey', ''))
                 user_rating = float(getattr(session, 'userRating', 0) or 0)
                 is_favorite = (user_rating >= 8.0)
+
+                # Verificar se o álbum/faixa já faz parte da biblioteca permanente
+                in_library = False
+                lib_section = getattr(session, 'librarySectionTitle', '')
+                disc_lib = settings.get("PLEX_DISCOVERY_LIBRARY", "Discover")
+                if lib_section and lib_section.lower() != disc_lib.lower():
+                    in_library = True
+                else:
+                    for m in getattr(session, 'media', []):
+                        for p in getattr(m, 'parts', []):
+                            p_file = p.file.lower()
+                            if 'musicdiscovery' not in p_file and 'playlistdiscovery' not in p_file and '/discovery' not in p_file:
+                                in_library = True
+                                break
+                    if not in_library:
+                        in_library = is_album_already_owned(server, session.grandparentTitle, session.parentTitle)
+
                 return {
                     "is_playing": True,
                     "state": player_state,
@@ -517,6 +643,7 @@ def _get_now_playing_data():
                     "rating_key": rating_key,
                     "user_rating": user_rating,
                     "is_favorite": is_favorite,
+                    "already_in_library": in_library,
                     "thumb": thumb,
                     "total_duration_ms": album_info.get("total_duration_ms", getattr(session, 'duration', 0)),
                     "elapsed_ms": album_info.get("elapsed_ms", getattr(session, 'viewOffset', 0)),
@@ -827,19 +954,60 @@ async def discover_music(artist: str):
         
     lastfm = LastFMClient(api_key=lastfm_api_key)
     
+    token = settings.get("PLEX_TOKEN")
+    server = None
+    if token:
+        try:
+            server = get_plex_server(token)
+        except Exception:
+            pass
+
+    ignored_artists = load_ignored_artists()
+    
     try:
-        similar_artists = await lastfm.get_similar_artists(artist, limit=5)
+        # Procurar até 20 bandas semelhantes para ter alternativas após filtrar as já existentes na biblioteca
+        similar_artists = await lastfm.get_similar_artists(artist, limit=20)
         
-        # Para cada artista, vamos buscar 2 músicas
+        filtered_similar = []
         playlist_candidates = []
+        
         for similar in similar_artists:
-            top_tracks = await lastfm.get_top_tracks(similar["name"], limit=2)
-            similar["top_tracks"] = top_tracks
-            playlist_candidates.extend(top_tracks)
+            sim_name = similar.get("name", "")
+            if not sim_name:
+                continue
+            sim_lower = sim_name.lower().strip()
+            
+            # 1. Excluir se estiver na lista de artistas ignorados
+            if sim_lower in ignored_artists:
+                continue
+                
+            # 2. Excluir se o artista já existe na biblioteca permanente (/music ou Plex)
+            if is_artist_already_owned(server, sim_name):
+                continue
+                
+            # 3. Obter top tracks e escolher apenas 1 música não existente na biblioteca
+            top_tracks = await lastfm.get_top_tracks(sim_name, limit=3)
+            chosen_track = None
+            
+            for tr in top_tracks:
+                tr_title = tr.get("title", "")
+                if server and is_track_in_permanent_library(server, sim_name, tr_title):
+                    continue
+                chosen_track = tr
+                break  # Apenas 1 música por banda!
+                
+            if chosen_track:
+                similar["top_tracks"] = [chosen_track]
+                filtered_similar.append(similar)
+                playlist_candidates.append(chosen_track)
+                
+            # Limitar a 6 recomendações no total
+            if len(playlist_candidates) >= 6:
+                break
             
         return {
             "source_artist": artist,
-            "similar_artists": similar_artists,
+            "similar_artists": filtered_similar,
             "playlist": playlist_candidates
         }
     except Exception as e:
@@ -949,57 +1117,7 @@ async def download_track(req: DownloadRequest):
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
 
-import asyncio
 
-def is_artist_in_permanent_library(server, artist_name: str) -> bool:
-    try:
-        settings = load_settings()
-        perm_lib = settings.get("PLEX_PERMANENT_LIBRARY", "Music")
-        try:
-            music = server.library.section(perm_lib)
-        except Exception:
-            music = server.library.section('Music')
-            
-        matches = music.searchArtists(title=artist_name)
-        clean_target = re.sub(r'[^\w]', '', artist_name.lower())
-        for a in matches:
-            clean_match = re.sub(r'[^\w]', '', a.title.lower())
-            if clean_match == clean_target:
-                # Verificar se tem faixas na biblioteca permanente (fora das pastas de descoberta)
-                for t in a.tracks()[:5]:
-                    for m in getattr(t, 'media', []):
-                        for p in getattr(m, 'parts', []):
-                            p_file = p.file.lower()
-                            if 'musicdiscovery' not in p_file and 'playlistdiscovery' not in p_file:
-                                return True
-    except Exception as e:
-        print(f"Erro ao verificar artista no Plex: {e}")
-    return False
-
-def is_track_in_permanent_library(server, artist_name: str, title: str) -> bool:
-    try:
-        settings = load_settings()
-        perm_lib = settings.get("PLEX_PERMANENT_LIBRARY", "Music")
-        try:
-            music = server.library.section(perm_lib)
-        except Exception:
-            music = server.library.section('Music')
-
-        matches = music.searchTracks(title=title)
-        clean_title = re.sub(r'[^\w]', '', title.lower())
-        clean_artist = re.sub(r'[^\w]', '', artist_name.lower())
-        for t in matches:
-            clean_match_title = re.sub(r'[^\w]', '', t.title.lower())
-            clean_match_artist = re.sub(r'[^\w]', '', getattr(t, 'grandparentTitle', '').lower())
-            if clean_match_title == clean_title and (clean_artist in clean_match_artist or clean_match_artist in clean_artist):
-                for m in getattr(t, 'media', []):
-                    for p in getattr(m, 'parts', []):
-                        p_file = p.file.lower()
-                        if 'musicdiscovery' not in p_file and 'playlistdiscovery' not in p_file:
-                            return True
-    except Exception:
-        pass
-    return False
 
 from plexapi.playqueue import PlayQueue
 from plexapi.playlist import Playlist

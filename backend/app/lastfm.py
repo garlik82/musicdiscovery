@@ -9,7 +9,7 @@ class LastFMClient:
         self.api_key = api_key
         
     async def get_similar_artists(self, artist: str, limit: int = 5) -> List[Dict]:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             params = {
                 "method": "artist.getsimilar",
                 "artist": artist,
@@ -36,7 +36,7 @@ class LastFMClient:
             return artists
 
     async def get_top_tracks(self, artist: str, limit: int = 2) -> List[Dict]:
-        async with httpx.AsyncClient() as client:
+        async with httpx.AsyncClient(timeout=10.0) as client:
             params = {
                 "method": "artist.gettoptracks",
                 "artist": artist,
@@ -44,9 +44,13 @@ class LastFMClient:
                 "format": "json",
                 "limit": limit
             }
-            response = await client.get(LASTFM_API_URL, params=params)
-            response.raise_for_status()
-            data = response.json()
+            try:
+                response = await client.get(LASTFM_API_URL, params=params)
+                response.raise_for_status()
+                data = response.json()
+            except Exception as e:
+                print(f"Aviso Last.fm get_top_tracks para '{artist}': {e}")
+                return []
             
             tracks = []
             if "toptracks" in data and "track" in data["toptracks"]:
@@ -55,10 +59,22 @@ class LastFMClient:
                     track_list = [track_list]
                     
                 for t in track_list:
+                    # Obter imagem da faixa / álbum se disponível no Last.fm
+                    img_url = None
+                    images = t.get("image", [])
+                    if isinstance(images, list):
+                        for img_item in reversed(images):
+                            if isinstance(img_item, dict) and img_item.get("#text"):
+                                txt = img_item["#text"].strip()
+                                if txt and not txt.endswith("2a96cbd8b46e442fc41c2b86b821562f.png"): # Last.fm generic placeholder
+                                    img_url = txt
+                                    break
+
                     tracks.append({
                         "title": t.get("name"),
                         "artist": artist,
-                        "playcount": int(t.get("playcount", 0))
+                        "playcount": int(t.get("playcount", 0)),
+                        "image": img_url
                     })
             return tracks
 
