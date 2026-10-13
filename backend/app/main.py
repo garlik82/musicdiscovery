@@ -942,6 +942,53 @@ async def plex_webhook_endpoint(request: Request):
         print(f"Erro ao processar Plex Webhook: {e}")
         return {"status": "error", "error": str(e)}
 
+_cover_cache = {}
+
+async def fetch_cover_art(artist: str, title: str = "") -> str | None:
+    """
+    Obtém a capa oficial do álbum/faixa via Deezer API (com fallback para iTunes).
+    Rápido, sem autenticação, e com cache em memória.
+    """
+    if not artist:
+        return None
+    cache_key = f"{artist.lower()} - {title.lower()}".strip()
+    if cache_key in _cover_cache:
+        return _cover_cache[cache_key]
+
+    query = f"{artist} {title}".strip()
+    headers = {"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64)"}
+
+    # 1. Tentar Deezer Search API (capas com boa qualidade 250x250)
+    try:
+        async with httpx.AsyncClient(timeout=3.5) as client:
+            r = await client.get("https://api.deezer.com/search", params={"q": query, "limit": 1}, headers=headers)
+            if r.status_code == 200:
+                items = r.json().get("data", [])
+                if items:
+                    cover = items[0].get("album", {}).get("cover_medium") or items[0].get("album", {}).get("cover_small")
+                    if cover:
+                        _cover_cache[cache_key] = cover
+                        return cover
+    except Exception:
+        pass
+
+    # 2. Fallback: Apple iTunes Search API
+    try:
+        async with httpx.AsyncClient(timeout=3.5) as client:
+            r = await client.get("https://itunes.apple.com/search", params={"term": query, "entity": "song", "limit": 1}, headers=headers)
+            if r.status_code == 200:
+                results = r.json().get("results", [])
+                if results:
+                    cover = results[0].get("artworkUrl100")
+                    if cover:
+                        cover = cover.replace("100x100bb.jpg", "250x250bb.jpg")
+                        _cover_cache[cache_key] = cover
+                        return cover
+    except Exception:
+        pass
+
+    return None
+
 from app.lastfm import LastFMClient
 
 @app.get("/api/discover")
@@ -1005,6 +1052,15 @@ async def discover_music(artist: str):
             if len(playlist_candidates) >= 6:
                 break
             
+        # 4. Obter capas reais em paralelo via Deezer / iTunes para cada faixa selecionada
+        async def attach_cover(track_item):
+            cover = await fetch_cover_art(track_item.get("artist", ""), track_item.get("title", ""))
+            if cover:
+                track_item["image"] = cover
+
+        if playlist_candidates:
+            await asyncio.gather(*(attach_cover(t) for t in playlist_candidates))
+
         return {
             "source_artist": artist,
             "similar_artists": filtered_similar,
