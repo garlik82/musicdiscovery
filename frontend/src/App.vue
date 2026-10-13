@@ -1,25 +1,53 @@
 <template>
-  <div class="container">
-    <h1>🎧 PlexDiscover</h1>
-    
-    <div v-if="loading">A verificar estado...</div>
-    
-    <div v-else-if="!plexLinked" class="auth-section">
-      <p>Para começar, precisamos de acesso à tua conta Plex.</p>
-      
-      <div v-if="!authUrl">
-        <button @click="startPlexAuth" class="btn">Ligar conta Plex</button>
+  <div class="app-shell">
+    <!-- Header Brand Bar & Live Integration Status -->
+    <header class="app-header">
+      <div class="brand">
+        <div class="brand-icon">🎧</div>
+        <div class="brand-text">
+          <h1>PlexDiscover</h1>
+          <span class="brand-tag">Hi-Fi Autonomous Discovery</span>
+        </div>
       </div>
       
-      <div v-else>
-        <p>Abre o link abaixo e autoriza a aplicação (abrirá noutro separador):</p>
-        <a :href="authUrl" target="_blank" @click="startChecking" class="btn btn-outline">
-          Autorizar no Plex
-        </a>
+      <div v-if="plexLinked" class="system-status-pills">
+        <div :class="['status-dot-pill', { active: plexLinked }]" title="Ligado ao Plex Media Server">
+          <span class="dot"></span> Plex
+        </div>
+        <div :class="['status-dot-pill', { active: slskdLinked }]" title="Ligado ao Soulseek (slskd)">
+          <span class="dot"></span> Soulseek
+        </div>
+        <div :class="['status-dot-pill', { active: lastfmLinked }]" title="Ligado à API do Last.fm">
+          <span class="dot"></span> Last.fm
+        </div>
+      </div>
+    </header>
+    
+    <div v-if="loading" class="loading-state">
+      <div class="spinner"></div>
+      <p>A sincronizar com os servidores...</p>
+    </div>
+    
+    <div v-else-if="!plexLinked" class="auth-section">
+      <div class="auth-card">
+        <div class="auth-icon">🔐</div>
+        <h2>Ligar ao Plex</h2>
+        <p>Para começar a descoberta e a injeção automática de músicas, conecta a tua conta Plex.</p>
         
-        <p v-if="isChecking" class="status-msg">
-          ⏳ A aguardar a tua autorização no browser...
-        </p>
+        <div v-if="!authUrl" class="auth-actions">
+          <button @click="startPlexAuth" class="btn btn-plex">Ligar conta Plex</button>
+        </div>
+        
+        <div v-else class="auth-actions">
+          <p class="auth-hint">Abre o link abaixo e autoriza a aplicação (abrirá noutro separador):</p>
+          <a :href="authUrl" target="_blank" @click="startChecking" class="btn btn-plex">
+            Autorizar no Plex
+          </a>
+          
+          <p v-if="isChecking" class="status-msg">
+            ⏳ A aguardar a tua autorização no browser...
+          </p>
+        </div>
       </div>
     </div>
     
@@ -30,30 +58,48 @@
           :class="['tab-btn', { active: currentTab === 'dashboard' }]" 
           @click="currentTab = 'dashboard'"
         >
-          🎧 Agora a Tocar & Fila
+          <span class="tab-icon">🎧</span> Agora a Tocar & Fila
         </button>
         <button 
           :class="['tab-btn', { active: currentTab === 'settings' }]" 
           @click="currentTab = 'settings'"
         >
-          ⚙️ Definições
+          <span class="tab-icon">⚙️</span> Definições
         </button>
       </nav>
 
       <!-- SEPARADOR: DASHBOARD & FILA -->
       <div v-if="currentTab === 'dashboard'" class="dashboard">
-        <!-- Card Agora a Tocar Enriquecido -->
-        <div class="now-playing-card">
+        <!-- Card Agora a Tocar Enriquecido com Ambient Glow -->
+        <div class="now-playing-card" :class="{ 'is-active': nowPlaying && nowPlaying.is_playing }">
+          <!-- Camada de Ambient Glow com a Capa -->
+          <div 
+            v-if="nowPlaying && nowPlaying.thumb" 
+            class="ambient-glow"
+            :style="{ backgroundImage: `url(${API_BASE}/plex/image?path=${encodeURIComponent(nowPlaying.thumb)})` }"
+          ></div>
+
           <div class="card-header">
-            <h3>Agora a Tocar no Plex</h3>
-            <span v-if="nowPlaying && nowPlaying.is_playing" :class="['status-pill', nowPlaying.state]">
-              {{ nowPlaying.state === 'paused' ? '⏸️ Em Pausa' : '▶️ A Tocar' }}
-            </span>
+            <div class="header-title-box">
+              <h3>Agora a Tocar no Plex</h3>
+              <span v-if="nowPlaying && nowPlaying.player" class="player-device-tag">
+                <span class="device-icon">{{ nowPlaying.player.toLowerCase().includes('carplay') ? '🚗' : '📱' }}</span>
+                {{ nowPlaying.player }} <span v-if="nowPlaying.user">({{ nowPlaying.user }})</span>
+              </span>
+            </div>
+            <div v-if="nowPlaying && nowPlaying.is_playing" class="status-pill-group">
+              <span :class="['status-pill', nowPlaying.state]">
+                <span v-if="nowPlaying.state !== 'paused'" class="soundwave">
+                  <span></span><span></span><span></span><span></span>
+                </span>
+                {{ nowPlaying.state === 'paused' ? '⏸️ Em Pausa' : '▶️ A Tocar' }}
+              </span>
+            </div>
           </div>
           
           <div v-if="nowPlaying" class="track-info">
             <div v-if="nowPlaying.is_playing" class="player-layout">
-              <!-- Capa do Álbum com Efeito Vinil -->
+              <!-- Capa do Álbum com Efeito Vinil 3D -->
               <div class="album-art-wrapper">
                 <img 
                   v-if="nowPlaying.thumb" 
@@ -70,9 +116,8 @@
                 <h4 class="track-title">{{ nowPlaying.track }}</h4>
                 <p class="track-artist">👤 <strong>{{ nowPlaying.artist }}</strong></p>
                 <p class="track-album">💿 {{ nowPlaying.album }}</p>
-                <p class="meta">Dispositivo: <strong>{{ nowPlaying.player }}</strong> ({{ nowPlaying.user }})</p>
                 <div v-if="nowPlaying.is_favorite" class="favorite-indicator-badge">
-                  ⭐ Marcada como Favorita no Plexamp
+                  ⭐ Marcada como Favorita no Plexamp (FLAC Agendado)
                 </div>
 
                 <!-- Barra de Progresso do Álbum / Tempo Restante -->
@@ -97,11 +142,11 @@
                 </div>
 
                 <div class="actions-row">
-                  <button class="btn btn-sm" @click="discover(nowPlaying.artist)" :disabled="isDiscovering">
-                    {{ isDiscovering ? 'A procurar...' : '🔍 Descobrir Manualmente' }}
+                  <button class="btn btn-glass" @click="discover(nowPlaying.artist)" :disabled="isDiscovering">
+                    {{ isDiscovering ? '⏳ A pesquisar...' : '🔍 Descobrir Semelhantes' }}
                   </button>
                   <button 
-                    class="btn btn-sm btn-fav-album" 
+                    class="btn btn-hifi" 
                     @click="favoriteAlbum(nowPlaying.artist, nowPlaying.album, nowPlaying.track)" 
                     :disabled="isFavoriting"
                     title="Pesquisa e descarrega o álbum completo em FLAC 16-bit / 44.1 kHz via slskd para a biblioteca permanente (/music)"
@@ -675,536 +720,963 @@ onMounted(() => {
 </script>
 
 <style scoped>
-.container { 
-  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  max-width: 600px; 
-  margin: 60px auto; 
-  text-align: center; 
+.app-shell {
+  max-width: 1100px;
+  margin: 0 auto;
+  padding: 24px 20px 80px;
+  min-height: 100vh;
 }
-h1 { color: #e5a00d; }
-.btn { 
-  background: #e5a00d; 
-  color: white; 
-  border: none; 
-  padding: 12px 24px; 
-  font-size: 16px; 
-  font-weight: bold;
-  cursor: pointer; 
-  border-radius: 6px; 
-  text-decoration: none; 
-  display: inline-block; 
-  margin-top: 15px;
-}
-.btn:hover { background: #c68a0a; }
-.btn-outline { 
-  background: transparent; 
-  border: 2px solid #e5a00d; 
-  color: #e5a00d; 
-}
-.btn-outline:hover {
-  background: #e5a00d;
-  color: white;
-}
-.input-text {
-  padding: 10px;
-  width: 80%;
-  max-width: 300px;
-  border: 1px solid #ccc;
-  border-radius: 4px;
-  margin-right: 10px;
-}
-.status-msg { margin-top: 25px; color: #666; font-style: italic; font-size: 14px; }
-.dashboard { padding: 30px; border: 1px solid #eee; border-radius: 12px; background: #fafafa; }
-.subtitle { color: #777; font-size: 14px; margin-top: 10px; }
 
-.now-playing-card, .discovery-card {
-  margin-top: 30px;
-  background: white;
-  border-radius: 8px;
-  padding: 20px;
-  box-shadow: 0 4px 6px rgba(0,0,0,0.05);
-}
-.track-info p { margin: 8px 0; }
-.meta { font-size: 12px; color: #999; margin-top: 15px; }
-.spin-disc { font-size: 40px; margin-bottom: 15px; animation: spin 4s linear infinite; }
-.spin-disc.paused { animation-play-state: paused; opacity: 0.6; }
-@keyframes spin { 100% { transform: rotate(360deg); } }
-
-.playlist { margin-top: 20px; text-align: left; }
-.track-item { 
-  display: flex; 
-  justify-content: space-between; 
-  align-items: center;
-  padding: 12px; 
-  border-bottom: 1px solid #eee; 
-}
-.track-item:last-child { border-bottom: none; }
-.badge { 
-  font-size: 11px; 
-  padding: 4px 8px; 
-  border-radius: 12px; 
-  font-weight: bold; 
-}
-.badge.pending { background: #eee; color: #666; }
-.badge.success { background: #d4edda; color: #155724; }
-.badge.error { background: #f8d7da; color: #721c24; }
-.btn-sm { padding: 6px 12px; font-size: 13px; margin-top: 0; }
-
-/* Novo Layout do Player e Capa */
-.card-header {
+/* Header Brand Bar */
+.app-header {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  border-bottom: 1px solid #eee;
-  padding-bottom: 12px;
+  padding: 16px 24px;
+  background: var(--bg-card);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  margin-bottom: 24px;
+  box-shadow: var(--shadow-card);
+}
+
+.brand {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+}
+
+.brand-icon {
+  font-size: 32px;
+  line-height: 1;
+  filter: drop-shadow(0 0 12px var(--accent-plex-glow));
+}
+
+.brand-text h1 {
+  font-size: 22px;
+  font-weight: 800;
+  letter-spacing: -0.03em;
+  background: linear-gradient(135deg, #ffffff 0%, #cbd5e1 100%);
+  -webkit-background-clip: text;
+  -webkit-text-fill-color: transparent;
+}
+
+.brand-tag {
+  display: block;
+  font-size: 11px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--accent-plex);
+}
+
+/* Status Pills */
+.system-status-pills {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.status-dot-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  border-radius: var(--radius-full);
+  background: rgba(255, 255, 255, 0.04);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-secondary);
+  transition: all 0.2s ease;
+}
+
+.status-dot-pill .dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #64748b;
+  transition: all 0.2s ease;
+}
+
+.status-dot-pill.active {
+  color: var(--text-primary);
+  border-color: rgba(16, 185, 129, 0.3);
+  background: rgba(16, 185, 129, 0.08);
+}
+
+.status-dot-pill.active .dot {
+  background: var(--color-success);
+  box-shadow: 0 0 8px var(--color-success);
+}
+
+/* Loading & Auth State */
+.loading-state {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  padding: 80px 20px;
+  color: var(--text-secondary);
+}
+
+.spinner {
+  width: 44px;
+  height: 44px;
+  border: 3px solid rgba(255, 255, 255, 0.1);
+  border-top-color: var(--accent-plex);
+  border-radius: 50%;
+  animation: spin 0.8s linear infinite;
   margin-bottom: 16px;
 }
-.card-header h3 { margin: 0; }
-.status-pill {
+
+.auth-section {
+  display: flex;
+  justify-content: center;
+  padding: 40px 0;
+}
+
+.auth-card {
+  max-width: 460px;
+  width: 100%;
+  padding: 36px 30px;
+  background: var(--bg-card);
+  backdrop-filter: blur(20px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  text-align: center;
+}
+
+.auth-icon {
+  font-size: 44px;
+  margin-bottom: 16px;
+}
+
+.auth-card h2 {
+  font-size: 24px;
+  margin-bottom: 10px;
+}
+
+.auth-card p {
+  color: var(--text-secondary);
+  font-size: 14px;
+  line-height: 1.6;
+}
+
+.btn-plex {
+  background: linear-gradient(135deg, #f59e0b 0%, #d97706 100%);
+  color: #000;
+  font-weight: 700;
+  border: none;
+  padding: 12px 28px;
+  border-radius: var(--radius-md);
+  font-size: 15px;
+  cursor: pointer;
+  box-shadow: 0 4px 16px var(--accent-plex-glow);
+  transition: all 0.2s ease;
+  text-decoration: none;
+  display: inline-block;
+  margin-top: 16px;
+}
+
+.btn-plex:hover {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 22px rgba(245, 158, 11, 0.4);
+}
+
+.auth-hint {
+  font-size: 13px;
+  color: var(--text-muted);
+  margin-top: 14px;
+}
+
+.status-msg {
+  color: var(--accent-plex);
+  font-size: 14px;
+  margin-top: 16px;
+}
+
+/* Tabs Navigation */
+.main-tabs {
+  display: flex;
+  gap: 12px;
+  margin-bottom: 24px;
+  background: rgba(18, 20, 32, 0.6);
+  padding: 6px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-subtle);
+  width: fit-content;
+}
+
+.tab-btn {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 24px;
+  border-radius: var(--radius-full);
+  font-size: 14px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  background: transparent;
+  border: none;
+  cursor: pointer;
+  transition: all 0.25s ease;
+}
+
+.tab-btn:hover {
+  color: var(--text-primary);
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.tab-btn.active {
+  color: #ffffff;
+  background: linear-gradient(135deg, rgba(245, 158, 11, 0.9) 0%, rgba(217, 119, 6, 0.9) 100%);
+  box-shadow: 0 4px 16px var(--accent-plex-glow);
+}
+
+/* Now Playing Card */
+.now-playing-card {
+  position: relative;
+  background: var(--bg-card);
+  backdrop-filter: blur(24px);
+  -webkit-backdrop-filter: blur(24px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 28px;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow-card);
+  overflow: hidden;
+  transition: all 0.3s ease;
+}
+
+.now-playing-card.is-active {
+  border-color: rgba(245, 158, 11, 0.35);
+  box-shadow: 0 10px 40px -10px rgba(0, 0, 0, 0.6), 0 0 25px -5px var(--accent-plex-glow);
+}
+
+.ambient-glow {
+  position: absolute;
+  top: -20%;
+  left: -10%;
+  width: 120%;
+  height: 140%;
+  background-size: cover;
+  background-position: center;
+  filter: blur(80px) saturate(180%);
+  opacity: 0.18;
+  pointer-events: none;
+  z-index: 0;
+  transition: opacity 0.5s ease;
+}
+
+.now-playing-card.is-active .ambient-glow {
+  opacity: 0.28;
+}
+
+.card-header {
+  position: relative;
+  z-index: 1;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding-bottom: 18px;
+  border-bottom: 1px solid var(--border-subtle);
+  margin-bottom: 22px;
+}
+
+.header-title-box {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+
+.card-header h3 {
+  font-size: 18px;
+  font-weight: 700;
+}
+
+.player-device-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid rgba(255, 255, 255, 0.12);
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
   font-size: 12px;
-  padding: 4px 10px;
-  border-radius: 20px;
-  font-weight: bold;
-  background: #e8f5e9;
-  color: #2e7d32;
+  font-weight: 600;
+  color: var(--text-primary);
 }
+
+.status-pill-group {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.status-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  background: var(--color-success-bg);
+  border: 1px solid rgba(16, 185, 129, 0.4);
+  color: #34d399;
+}
+
 .status-pill.paused {
-  background: #fff3e0;
-  color: #ef6c00;
+  background: var(--color-warning-bg);
+  border-color: rgba(245, 158, 11, 0.4);
+  color: #fbbf24;
 }
+
+/* Soundwave Equalizer Animation */
+.soundwave {
+  display: inline-flex;
+  align-items: flex-end;
+  gap: 3px;
+  height: 14px;
+}
+
+.soundwave span {
+  width: 3px;
+  background: #34d399;
+  border-radius: 2px;
+  animation: soundwaveBar 1.2s ease-in-out infinite;
+}
+
+.soundwave span:nth-child(1) { height: 40%; animation-delay: 0.1s; }
+.soundwave span:nth-child(2) { height: 90%; animation-delay: 0.3s; }
+.soundwave span:nth-child(3) { height: 60%; animation-delay: 0.2s; }
+.soundwave span:nth-child(4) { height: 100%; animation-delay: 0.4s; }
+
+@keyframes soundwaveBar {
+  0%, 100% { transform: scaleY(0.4); }
+  50% { transform: scaleY(1); }
+}
+
+/* Player Layout */
+.track-info {
+  position: relative;
+  z-index: 1;
+}
+
 .player-layout {
   display: flex;
-  gap: 24px;
+  gap: 32px;
   align-items: center;
-  text-align: left;
 }
-@media (max-width: 600px) {
-  .player-layout { flex-direction: column; text-align: center; }
+
+@media (max-width: 768px) {
+  .player-layout {
+    flex-direction: column;
+    text-align: center;
+    gap: 20px;
+  }
 }
+
 .album-art-wrapper {
   position: relative;
-  width: 140px;
-  height: 140px;
+  width: 170px;
+  height: 170px;
   flex-shrink: 0;
 }
+
 .album-art {
-  width: 140px;
-  height: 140px;
-  border-radius: 8px;
+  width: 170px;
+  height: 170px;
+  border-radius: var(--radius-md);
   object-fit: cover;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.15);
+  box-shadow: 0 10px 30px rgba(0, 0, 0, 0.5), 0 0 0 1px rgba(255, 255, 255, 0.1);
   position: relative;
   z-index: 2;
 }
+
 .album-art-placeholder {
-  width: 140px;
-  height: 140px;
-  border-radius: 8px;
-  background: #e0e0e0;
+  width: 170px;
+  height: 170px;
+  border-radius: var(--radius-md);
+  background: var(--bg-surface-elevated);
   display: flex;
   align-items: center;
   justify-content: center;
-  font-size: 40px;
+  font-size: 50px;
+  border: 1px solid var(--border-subtle);
 }
+
 .vinyl-disc {
   position: absolute;
   top: 15px;
-  right: -20px;
-  font-size: 80px;
+  right: -24px;
+  font-size: 110px;
   line-height: 1;
   z-index: 1;
-  opacity: 0.8;
-  animation: spin 5s linear infinite;
+  opacity: 0.85;
+  filter: drop-shadow(0 4px 14px rgba(0, 0, 0, 0.7));
+  animation: spin 6s linear infinite;
 }
+
 .vinyl-disc.paused {
   animation-play-state: paused;
-  opacity: 0.4;
+  opacity: 0.45;
 }
+
 .player-details {
   flex-grow: 1;
   min-width: 0;
 }
+
 .track-title {
-  font-size: 20px;
-  margin: 0 0 6px 0;
-  color: #222;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  font-size: 26px;
+  font-weight: 800;
+  margin: 0 0 8px 0;
+  color: var(--text-primary);
+  line-height: 1.25;
+  letter-spacing: -0.02em;
 }
-.track-artist, .track-album {
+
+.track-artist {
+  margin: 4px 0;
+  font-size: 16px;
+  color: var(--accent-plex);
+  font-weight: 600;
+}
+
+.track-album {
   margin: 4px 0;
   font-size: 14px;
-  color: #444;
+  color: var(--text-secondary);
 }
+
+.favorite-indicator-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  background: rgba(245, 158, 11, 0.15);
+  border: 1px solid rgba(245, 158, 11, 0.35);
+  color: #fbbf24;
+  padding: 5px 12px;
+  border-radius: var(--radius-full);
+  font-weight: 600;
+  font-size: 12px;
+  margin-top: 10px;
+}
+
+/* Progress Box */
 .album-progress-box {
-  background: #f8f9fa;
-  border: 1px solid #eaeaea;
-  border-radius: 8px;
-  padding: 10px 14px;
-  margin: 12px 0;
+  background: rgba(10, 11, 18, 0.6);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 12px 16px;
+  margin: 14px 0;
 }
+
 .progress-labels {
   display: flex;
   justify-content: space-between;
   font-size: 12px;
   font-weight: 600;
-  color: #555;
-  margin-bottom: 6px;
+  color: var(--text-secondary);
+  margin-bottom: 8px;
 }
+
 .remaining-time {
-  color: #0066cc;
+  color: var(--color-cyan);
+  font-family: var(--font-mono);
 }
+
 .progress-bar-bg {
   width: 100%;
   height: 6px;
-  background: #e0e0e0;
+  background: rgba(255, 255, 255, 0.08);
   border-radius: 3px;
   overflow: hidden;
 }
+
 .progress-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, #e5a00d, #ffc107);
+  background: linear-gradient(90deg, var(--accent-plex), var(--accent-hifi));
   transition: width 0.4s ease;
+  box-shadow: 0 0 10px var(--accent-plex-glow);
 }
+
 .time-sub {
   display: flex;
   justify-content: space-between;
   font-size: 11px;
-  color: #888;
-  margin-top: 4px;
-}
-.non-album-tag {
-  display: inline-block;
-  background: #f0f0f0;
-  padding: 4px 8px;
-  border-radius: 4px;
-  font-size: 12px;
-  color: #666;
-  margin: 10px 0;
-}
-.actions-row {
-  margin-top: 10px;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  margin-top: 6px;
 }
 
-/* Fila de Descoberta */
-.queue-card { text-align: left; }
+.non-album-tag {
+  display: inline-block;
+  background: rgba(255, 255, 255, 0.04);
+  padding: 4px 10px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  color: var(--text-muted);
+  margin: 10px 0;
+}
+
+.actions-row {
+  display: flex;
+  gap: 12px;
+  margin-top: 16px;
+  flex-wrap: wrap;
+}
+
+/* Glass & HiFi Buttons */
+.btn-glass {
+  background: rgba(255, 255, 255, 0.06);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  font-weight: 600;
+  font-size: 13px;
+  padding: 10px 18px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-glass:hover:not(:disabled) {
+  background: rgba(255, 255, 255, 0.12);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+.btn-hifi {
+  background: linear-gradient(135deg, var(--accent-hifi) 0%, var(--accent-hifi-hover) 100%);
+  color: #ffffff;
+  border: none;
+  font-weight: 700;
+  font-size: 13px;
+  padding: 10px 20px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  box-shadow: 0 4px 16px var(--accent-hifi-glow);
+  transition: all 0.2s ease;
+}
+
+.btn-hifi:hover:not(:disabled) {
+  transform: translateY(-1px);
+  box-shadow: 0 6px 20px rgba(139, 92, 246, 0.45);
+}
+
+.btn-hifi:disabled, .btn-glass:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+.empty-state {
+  padding: 40px 20px;
+  text-align: center;
+  color: var(--text-secondary);
+}
+
+.empty-state .subtitle {
+  color: var(--text-muted);
+  font-size: 13px;
+  margin-top: 6px;
+}
+
+/* Real-Time Queue Card */
+.discovery-card {
+  background: var(--bg-card);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-lg);
+  padding: 24px;
+  margin-bottom: 24px;
+  box-shadow: var(--shadow-card);
+}
+
+.discovery-card h3 {
+  font-size: 18px;
+  font-weight: 700;
+  color: var(--text-primary);
+}
+
+.subtitle {
+  color: var(--text-secondary);
+  font-size: 13px;
+}
+
 .btn-text {
   background: none;
   border: none;
-  color: #999;
+  color: var(--text-muted);
   font-size: 12px;
   cursor: pointer;
   text-decoration: underline;
+  transition: color 0.2s ease;
 }
-.btn-text:hover { color: #555; }
+
+.btn-text:hover {
+  color: var(--text-primary);
+}
+
 .queue-list {
-  margin-top: 14px;
   display: flex;
   flex-direction: column;
-  gap: 8px;
+  gap: 10px;
+  margin-top: 16px;
 }
+
 .queue-row {
   display: flex;
   justify-content: space-between;
   align-items: center;
-  padding: 10px 14px;
-  background: #fdfdfd;
-  border: 1px solid #eee;
-  border-radius: 6px;
+  padding: 12px 16px;
+  background: rgba(18, 20, 32, 0.7);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  transition: all 0.2s ease;
+  flex-wrap: wrap;
+  gap: 12px;
 }
+
+.queue-row:hover {
+  background: rgba(28, 32, 50, 0.8);
+  border-color: rgba(255, 255, 255, 0.12);
+}
+
 .queue-meta {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
+  flex: 1;
+  min-width: 200px;
 }
+
 .queue-index {
   font-size: 12px;
-  font-weight: bold;
-  color: #bbb;
-  width: 16px;
+  font-weight: 700;
+  color: var(--text-muted);
+  font-family: var(--font-mono);
+  width: 20px;
 }
+
 .queue-artist {
-  color: #222;
+  color: var(--text-primary);
+  font-size: 14px;
 }
+
 .queue-title {
-  color: #666;
+  color: var(--text-secondary);
+  font-size: 14px;
 }
+
 .queue-detail {
   font-size: 11px;
-  color: #888;
-  margin-top: 2px;
+  color: var(--text-muted);
+  margin-top: 3px;
 }
-.badge-searching { background: #e3f2fd; color: #1565c0; }
-.badge-downloading { background: #fff8e1; color: #f57f17; }
-.badge-tagging { background: #ede7f6; color: #512da8; }
-.badge-imported { background: #e0f2f1; color: #00695c; }
-.badge-injected { background: #e8f5e9; color: #2e7d32; }
-.badge-error { background: #ffebee; color: #c62828; }
 
 .queue-right-col {
   display: flex;
   align-items: center;
   gap: 12px;
+  flex-wrap: wrap;
 }
+
+.badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+}
+
+.badge-searching {
+  background: var(--color-cyan-bg);
+  color: #38bdf8;
+  border: 1px solid rgba(56, 189, 248, 0.3);
+}
+
+.badge-downloading {
+  background: var(--color-warning-bg);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.3);
+}
+
+.badge-tagging {
+  background: var(--accent-hifi-glow);
+  color: #c084fc;
+  border: 1px solid rgba(192, 132, 252, 0.3);
+}
+
+.badge-imported {
+  background: var(--color-success-bg);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+}
+
+.badge-injected {
+  background: rgba(16, 185, 129, 0.2);
+  color: #6ee7b7;
+  border: 1px solid rgba(110, 231, 183, 0.4);
+}
+
+.badge-error {
+  background: var(--color-error-bg);
+  color: #f87171;
+  border: 1px solid rgba(248, 113, 113, 0.3);
+}
+
+.badge.pending {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+}
+
 .queue-actions {
   display: flex;
   gap: 6px;
 }
+
 .btn-action {
-  padding: 4px 8px;
-  border-radius: 4px;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
   font-size: 11px;
   font-weight: 600;
   cursor: pointer;
   border: 1px solid transparent;
-  transition: all 0.2s;
-}
-.btn-promote {
-  background: #fff8e1;
-  color: #b78103;
-  border-color: #ffe082;
-}
-.btn-promote:hover {
-  background: #ffecb3;
-  color: #8c6000;
-}
-.btn-ignore {
-  background: #f5f5f5;
-  color: #666;
-  border-color: #ddd;
-}
-.btn-ignore:hover {
-  background: #ffebee;
-  color: #c62828;
-  border-color: #ffcdd2;
-}
-
-/* Chips de Artistas Ignorados */
-.ignored-chips {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  margin-top: 10px;
-}
-.ignored-chip {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  background: #eee;
-  padding: 4px 10px;
-  border-radius: 16px;
-  font-size: 12px;
-  color: #444;
-}
-.chip-remove {
-  background: none;
-  border: none;
-  color: #888;
-  cursor: pointer;
-  font-size: 12px;
-  padding: 0;
-  display: flex;
-  align-items: center;
-}
-.chip-remove:hover {
-  color: #c62828;
-}
-
-/* Navegação por Separadores */
-.main-tabs {
-  display: flex;
-  justify-content: center;
-  gap: 12px;
-  margin-bottom: 24px;
-}
-.tab-btn {
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  padding: 10px 22px;
-  border-radius: 24px;
-  font-size: 14px;
-  font-weight: 600;
-  color: #475569;
-  cursor: pointer;
   transition: all 0.2s ease;
 }
-.tab-btn:hover {
-  background: #e2e8f0;
-  color: #1e293b;
-}
-.tab-btn.active {
-  background: #0066cc;
-  border-color: #0066cc;
-  color: white;
-  box-shadow: 0 4px 12px rgba(0, 102, 204, 0.25);
-}
 
-/* Indicador e Botão de Álbum Favorito */
-.favorite-indicator-badge {
-  background: #fff8e1;
-  color: #b78103;
-  border: 1px solid #ffe082;
-  padding: 4px 10px;
-  border-radius: 6px;
-  font-weight: 600;
-  font-size: 13px;
-  display: inline-block;
-  margin-top: 6px;
-}
-.btn-fav-album {
-  background: #7c3aed;
-  color: white;
-  border: none;
-  font-weight: 600;
-  cursor: pointer;
-  transition: all 0.2s ease;
-}
-.btn-fav-album:hover:not(:disabled) {
-  background: #6d28d9;
-  box-shadow: 0 2px 8px rgba(124, 58, 237, 0.3);
-}
-.btn-fav-album:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
 .btn-album-fav {
-  background: #ede9fe;
-  color: #6d28d9;
-  border-color: #ddd6fe;
-}
-.btn-album-fav:hover {
-  background: #ddd6fe;
-  color: #5b21b6;
+  background: var(--accent-hifi-glow);
+  color: #c084fc;
+  border-color: rgba(192, 132, 252, 0.4);
 }
 
-/* Cartão de Downloads de Álbuns em FLAC */
-.album-downloads-card {
-  margin-top: 20px;
+.btn-album-fav:hover {
+  background: rgba(139, 92, 246, 0.35);
+  color: #ffffff;
 }
+
+.btn-promote {
+  background: var(--accent-plex-glow);
+  color: #fbbf24;
+  border-color: rgba(251, 191, 36, 0.4);
+}
+
+.btn-promote:hover {
+  background: rgba(245, 158, 11, 0.35);
+  color: #ffffff;
+}
+
+.btn-ignore {
+  background: rgba(255, 255, 255, 0.05);
+  color: var(--text-muted);
+  border-color: var(--border-subtle);
+}
+
+.btn-ignore:hover {
+  background: var(--color-error-bg);
+  color: #f87171;
+  border-color: rgba(248, 113, 113, 0.4);
+}
+
+/* Album Downloads Card */
 .badge-cd-count {
-  background: #e0e7ff;
-  color: #4338ca;
+  background: var(--accent-hifi-glow);
+  color: #c084fc;
+  border: 1px solid rgba(192, 132, 252, 0.4);
   padding: 4px 10px;
-  border-radius: 12px;
+  border-radius: var(--radius-full);
   font-size: 12px;
-  font-weight: 600;
+  font-weight: 700;
 }
+
 .album-cards-grid {
   display: flex;
   flex-direction: column;
   gap: 12px;
-  margin-top: 14px;
+  margin-top: 16px;
 }
+
 .album-item-card {
-  background: #f8fafc;
-  border: 1px solid #e2e8f0;
-  border-radius: 8px;
-  padding: 14px;
+  background: rgba(18, 20, 32, 0.7);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+  padding: 16px;
   display: flex;
   flex-direction: column;
-  gap: 10px;
+  gap: 12px;
   transition: all 0.2s ease;
 }
+
 .album-item-card:hover {
-  border-color: #cbd5e1;
-  box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+  background: rgba(24, 28, 44, 0.85);
+  border-color: rgba(255, 255, 255, 0.15);
 }
+
 .album-item-top {
   display: flex;
   justify-content: space-between;
   align-items: flex-start;
-  gap: 12px;
+  gap: 14px;
 }
+
 .album-meta-info {
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
 }
+
 .alb-artist {
-  color: #64748b;
+  color: var(--accent-plex);
   font-size: 12px;
+  font-weight: 700;
   text-transform: uppercase;
-  letter-spacing: 0.5px;
+  letter-spacing: 0.05em;
 }
+
 .alb-title {
   margin: 0;
-  font-size: 16px;
-  color: #1e293b;
+  font-size: 17px;
+  color: var(--text-primary);
   font-weight: 700;
 }
+
 .alb-year {
-  color: #94a3b8;
+  color: var(--text-muted);
   font-weight: 400;
   font-size: 14px;
 }
+
 .alb-detail {
   font-size: 13px;
-  color: #475569;
-  margin-top: 2px;
+  color: var(--text-secondary);
 }
+
 .alb-status-wrapper {
   display: flex;
   align-items: center;
-  gap: 8px;
+  gap: 10px;
 }
+
 .btn-delete-alb {
   background: none;
   border: none;
-  color: #94a3b8;
-  font-size: 14px;
+  color: var(--text-muted);
+  font-size: 16px;
   cursor: pointer;
   padding: 4px 8px;
-  border-radius: 4px;
-  transition: all 0.2s;
+  border-radius: var(--radius-sm);
+  transition: all 0.2s ease;
 }
+
 .btn-delete-alb:hover {
-  color: #ef4444;
-  background: #fee2e2;
+  color: #f87171;
+  background: var(--color-error-bg);
 }
+
 .album-progress-bar-container {
   position: relative;
-  height: 18px;
-  background: #e2e8f0;
-  border-radius: 9px;
+  height: 20px;
+  background: rgba(10, 11, 18, 0.7);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-full);
   overflow: hidden;
   display: flex;
   align-items: center;
 }
+
 .album-progress-bar-fill {
   height: 100%;
-  background: linear-gradient(90deg, #6366f1, #8b5cf6);
-  border-radius: 9px;
+  background: linear-gradient(90deg, var(--accent-hifi) 0%, #a855f7 100%);
+  border-radius: var(--radius-full);
   transition: width 0.4s ease;
+  box-shadow: 0 0 12px var(--accent-hifi-glow);
 }
+
 .album-progress-text {
   position: absolute;
   width: 100%;
   text-align: center;
   font-size: 11px;
   font-weight: 700;
-  color: #1e293b;
-  text-shadow: 0 0 2px rgba(255, 255, 255, 0.8);
+  color: #ffffff;
+  font-family: var(--font-mono);
+  text-shadow: 0 1px 3px rgba(0, 0, 0, 0.8);
 }
+
 .album-item-footer {
   display: flex;
   justify-content: space-between;
   align-items: center;
   font-size: 12px;
-  padding-top: 4px;
-  border-top: 1px solid #f1f5f9;
+  padding-top: 8px;
+  border-top: 1px solid var(--border-subtle);
 }
+
 .badge-quality-flac {
-  background: #ecfdf5;
-  color: #047857;
-  border: 1px solid #a7f3d0;
-  padding: 2px 8px;
-  border-radius: 4px;
-  font-weight: 600;
+  background: rgba(16, 185, 129, 0.12);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.3);
+  padding: 3px 10px;
+  border-radius: var(--radius-sm);
+  font-weight: 700;
   font-size: 11px;
+  font-family: var(--font-mono);
 }
+
 .alb-user-tag {
-  color: #64748b;
+  color: var(--text-muted);
   font-size: 12px;
+  font-family: var(--font-mono);
+}
+
+/* Playlist & Manual Discovery */
+.playlist {
+  margin-top: 16px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+
+.track-item {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 12px 16px;
+  background: rgba(18, 20, 32, 0.7);
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-md);
+}
+
+.track-details {
+  font-size: 14px;
+}
+
+.track-details strong {
+  color: var(--text-primary);
+}
+
+.btn-sm {
+  background: rgba(255, 255, 255, 0.08);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-primary);
+  padding: 6px 14px;
+  border-radius: var(--radius-sm);
+  font-size: 12px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 0.2s ease;
+}
+
+.btn-sm:hover {
+  background: var(--accent-plex);
+  color: #000;
 }
 </style>

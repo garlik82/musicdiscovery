@@ -195,20 +195,19 @@
       </div>
 
       <!-- Webhook do Plex -->
-      <div class="setting-group" style="margin-top: 16px; background: #f8fafc; padding: 14px; border-radius: 8px; border: 1px solid #e2e8f0;">
-        <label class="setting-label" style="display: flex; align-items: center; gap: 6px;">
+      <div class="setting-group webhook-box">
+        <label class="setting-label">
           <span>⚡ Webhook do Plex (Deteção Instantânea)</span>
         </label>
         <p class="field-hint" style="margin-bottom: 8px;">
           Configura este webhook nas definições do teu Plex Media Server (<strong>Definições → Webhooks → Adicionar Webhook</strong>) para descarregar o álbum no mesmo segundo em que favoritadas uma faixa:
         </p>
-        <div style="display: flex; gap: 8px; align-items: center;">
+        <div class="webhook-input-row">
           <input 
             type="text" 
             readonly 
             :value="plexWebhookUrl" 
-            class="text-input" 
-            style="font-family: monospace; font-size: 13px; background: #fff;"
+            class="text-input webhook-input" 
           />
           <button @click="copyWebhookUrl" class="btn btn-sm" style="white-space: nowrap;">
             {{ copiedWebhook ? '✓ Copiado!' : '📋 Copiar URL' }}
@@ -695,9 +694,10 @@ onMounted(() => {
 
 <style scoped>
 .settings-view {
-  max-width: 850px;
+  max-width: 900px;
   margin: 0 auto;
   text-align: left;
+  padding-bottom: 40px;
 }
 
 .settings-header {
@@ -706,61 +706,68 @@ onMounted(() => {
 
 .settings-header h2 {
   font-size: 26px;
+  font-weight: 800;
   margin: 0 0 6px 0;
-  color: #1a1a1a;
+  color: var(--text-primary);
+  letter-spacing: -0.02em;
 }
 
 .subtitle {
-  color: #666;
+  color: var(--text-secondary);
   font-size: 14px;
   margin: 0;
 }
 
 .settings-card {
-  background: #ffffff;
-  border-radius: 12px;
-  padding: 24px;
+  background: var(--bg-card);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border-radius: var(--radius-lg);
+  padding: 26px;
   margin-bottom: 24px;
-  box-shadow: 0 4px 14px rgba(0, 0, 0, 0.05);
-  border: 1px solid #eef0f3;
+  box-shadow: var(--shadow-card);
+  border: 1px solid var(--border-subtle);
+  transition: all 0.2s ease;
 }
 
 .card-title-row {
   display: flex;
   align-items: flex-start;
-  gap: 14px;
-  margin-bottom: 20px;
+  gap: 16px;
+  margin-bottom: 22px;
 }
 
 .card-icon {
-  font-size: 26px;
-  background: #f4f6fa;
-  padding: 8px;
-  border-radius: 10px;
+  font-size: 24px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  padding: 10px;
+  border-radius: var(--radius-sm);
   line-height: 1;
 }
 
 .card-title-row h3 {
   margin: 0 0 4px 0;
   font-size: 18px;
-  color: #111;
+  font-weight: 700;
+  color: var(--text-primary);
 }
 
 .card-sub {
   margin: 0;
   font-size: 13px;
-  color: #666;
+  color: var(--text-secondary);
 }
 
 .setting-group {
-  margin-bottom: 18px;
+  margin-bottom: 20px;
 }
 
 .setting-label {
   display: block;
   font-size: 13px;
   font-weight: 600;
-  color: #333;
+  color: var(--text-primary);
   margin-bottom: 10px;
 }
 
@@ -780,42 +787,45 @@ onMounted(() => {
   display: flex;
   align-items: flex-start;
   gap: 12px;
-  padding: 14px;
-  border-radius: 8px;
-  border: 2px solid #e2e8f0;
-  background: #f8fafc;
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+  background: rgba(18, 20, 32, 0.7);
   cursor: pointer;
   transition: all 0.2s ease;
 }
 
 .radio-card:hover {
-  border-color: #cbd5e1;
+  border-color: rgba(255, 255, 255, 0.2);
+  background: rgba(28, 32, 50, 0.85);
 }
 
 .radio-card.active {
-  border-color: #0066cc;
-  background: #f0f7ff;
+  border-color: var(--accent-plex);
+  background: rgba(245, 158, 11, 0.08);
+  box-shadow: 0 0 20px -5px var(--accent-plex-glow);
 }
 
 .radio-content strong {
   display: block;
   font-size: 14px;
-  color: #1e293b;
+  color: var(--text-primary);
   margin-bottom: 4px;
 }
 
 .radio-content p {
   font-size: 12px;
-  color: #64748b;
-  line-height: 1.4;
+  color: var(--text-secondary);
+  line-height: 1.45;
   margin: 0;
 }
 
 .progressive-options {
-  background: #f8fafc;
-  border-radius: 8px;
+  background: rgba(10, 11, 18, 0.6);
+  border-radius: var(--radius-md);
   padding: 18px;
-  border-left: 4px solid #0066cc;
+  border: 1px solid var(--border-subtle);
+  border-left: 4px solid var(--accent-plex);
   margin-top: 16px;
 }
 
@@ -840,7 +850,7 @@ onMounted(() => {
 .field-label {
   font-size: 13px;
   font-weight: 600;
-  color: #334155;
+  color: var(--text-primary);
   display: flex;
   align-items: center;
   gap: 6px;
@@ -848,8 +858,9 @@ onMounted(() => {
 
 .field-hint {
   font-size: 12px;
-  color: #64748b;
+  color: var(--text-muted);
   margin: 0;
+  line-height: 1.4;
 }
 
 .help-tooltip {
@@ -859,19 +870,25 @@ onMounted(() => {
 
 .select-input, .text-input {
   width: 100%;
-  padding: 9px 12px;
-  border-radius: 6px;
-  border: 1px solid #cbd5e1;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
+  border: 1px solid var(--border-subtle);
   font-size: 13px;
-  background: #fff;
-  color: #1e293b;
+  background: rgba(10, 11, 18, 0.7);
+  color: var(--text-primary);
   box-sizing: border-box;
+  transition: all 0.2s ease;
+}
+
+.select-input option {
+  background: #121420;
+  color: #f8fafc;
 }
 
 .select-input:focus, .text-input:focus {
   outline: none;
-  border-color: #0066cc;
-  box-shadow: 0 0 0 3px rgba(0, 102, 204, 0.15);
+  border-color: var(--accent-plex);
+  box-shadow: 0 0 0 3px var(--accent-plex-glow);
 }
 
 .toggle-row {
@@ -884,13 +901,14 @@ onMounted(() => {
 .auto-pilot-settings {
   margin-top: 16px;
   padding-top: 16px;
-  border-top: 1px solid #eef2f6;
+  border-top: 1px solid var(--border-subtle);
 }
 
 .radio-inline-group {
   display: flex;
   gap: 20px;
-  margin-top: 6px;
+  margin-top: 8px;
+  flex-wrap: wrap;
 }
 
 .radio-inline {
@@ -899,13 +917,18 @@ onMounted(() => {
   gap: 8px;
   font-size: 13px;
   cursor: pointer;
+  color: var(--text-secondary);
+}
+
+.radio-inline:hover {
+  color: var(--text-primary);
 }
 
 /* Switch Toggle */
 .switch {
   position: relative;
   display: inline-block;
-  width: 44px;
+  width: 46px;
   height: 24px;
 }
 
@@ -919,9 +942,10 @@ onMounted(() => {
   position: absolute;
   cursor: pointer;
   top: 0; left: 0; right: 0; bottom: 0;
-  background-color: #cbd5e1;
+  background-color: rgba(255, 255, 255, 0.15);
   transition: .3s;
   border-radius: 24px;
+  border: 1px solid var(--border-subtle);
 }
 
 .slider:before {
@@ -929,29 +953,33 @@ onMounted(() => {
   content: "";
   height: 18px;
   width: 18px;
-  left: 3px;
-  bottom: 3px;
-  background-color: white;
+  left: 2px;
+  bottom: 2px;
+  background-color: #ffffff;
   transition: .3s;
   border-radius: 50%;
+  box-shadow: 0 1px 4px rgba(0,0,0,0.4);
 }
 
 input:checked + .slider {
-  background-color: #0066cc;
+  background-color: var(--accent-plex);
+  border-color: var(--accent-plex);
+  box-shadow: 0 0 12px var(--accent-plex-glow);
 }
 
 input:checked + .slider:before {
-  transform: translateX(20px);
+  transform: translateX(22px);
+  background-color: #000000;
 }
 
 .divider {
   border: 0;
-  border-top: 1px solid #eef2f6;
+  border-top: 1px solid var(--border-subtle);
   margin: 18px 0;
 }
 
 .integration-block {
-  padding: 4px 0;
+  padding: 8px 0;
 }
 
 .integration-header {
@@ -962,40 +990,66 @@ input:checked + .slider:before {
 
 .badge-status {
   font-size: 12px;
-  font-weight: 600;
-  padding: 4px 10px;
-  border-radius: 12px;
+  font-weight: 700;
+  padding: 4px 12px;
+  border-radius: var(--radius-full);
 }
 
 .badge-status.success {
-  background: #dcfce7;
-  color: #166534;
+  background: var(--color-success-bg);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.3);
 }
 
 .badge-status.warning {
-  background: #fef3c7;
-  color: #92400e;
+  background: var(--color-warning-bg);
+  color: #fbbf24;
+  border: 1px solid rgba(251, 191, 36, 0.3);
 }
 
 .btn {
-  background: #0066cc;
-  color: white;
+  background: linear-gradient(135deg, var(--accent-plex) 0%, var(--accent-plex-hover) 100%);
+  color: #000;
   border: none;
-  padding: 8px 16px;
-  border-radius: 6px;
+  padding: 9px 18px;
+  border-radius: var(--radius-sm);
   font-size: 13px;
-  font-weight: 600;
+  font-weight: 700;
   cursor: pointer;
-  transition: background 0.2s;
+  transition: all 0.2s ease;
+  box-shadow: 0 2px 10px var(--accent-plex-glow);
 }
 
 .btn:hover {
-  background: #0052a3;
+  transform: translateY(-1px);
+  box-shadow: 0 4px 14px rgba(245, 158, 11, 0.4);
 }
 
 .btn-sm {
-  padding: 6px 12px;
+  padding: 6px 14px;
   font-size: 12px;
+}
+
+.webhook-box {
+  margin-top: 16px;
+  background: rgba(10, 11, 18, 0.6);
+  padding: 16px;
+  border-radius: var(--radius-md);
+  border: 1px solid var(--border-subtle);
+}
+
+.webhook-input-row {
+  display: flex;
+  gap: 10px;
+  align-items: center;
+  margin-top: 8px;
+}
+
+.webhook-input {
+  font-family: var(--font-mono);
+  font-size: 13px;
+  background: rgba(18, 20, 32, 0.9);
+  color: var(--color-cyan);
 }
 
 .add-ignored-row {
@@ -1014,39 +1068,46 @@ input:checked + .slider:before {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  background: #f1f5f9;
-  border: 1px solid #e2e8f0;
-  padding: 5px 12px;
-  border-radius: 20px;
+  background: rgba(255, 255, 255, 0.05);
+  border: 1px solid var(--border-subtle);
+  padding: 6px 14px;
+  border-radius: var(--radius-full);
   font-size: 12px;
-  color: #334155;
+  color: var(--text-primary);
   font-weight: 500;
+  transition: all 0.2s ease;
+}
+
+.ignored-chip:hover {
+  background: rgba(255, 255, 255, 0.09);
+  border-color: rgba(255, 255, 255, 0.15);
 }
 
 .chip-remove {
   background: none;
   border: none;
-  color: #94a3b8;
+  color: var(--text-muted);
   cursor: pointer;
   font-size: 13px;
   padding: 0;
   line-height: 1;
+  transition: color 0.2s ease;
 }
 
 .chip-remove:hover {
-  color: #dc2626;
+  color: #f87171;
 }
 
 .empty-hint {
   font-size: 13px;
-  color: #94a3b8;
+  color: var(--text-muted);
   font-style: italic;
   margin: 0;
 }
 
-/* Zona de Limpeza */
+/* Danger Zone */
 .danger-zone-card {
-  border-left: 4px solid #ef4444;
+  border-left: 4px solid var(--color-error);
 }
 
 .cleanup-action-box {
@@ -1054,50 +1115,53 @@ input:checked + .slider:before {
   align-items: center;
   justify-content: space-between;
   gap: 20px;
-  background: #fef2f2;
-  border: 1px solid #fee2e2;
+  background: rgba(239, 68, 68, 0.08);
+  border: 1px solid rgba(239, 68, 68, 0.25);
   padding: 16px 20px;
-  border-radius: 8px;
+  border-radius: var(--radius-md);
 }
 
 .cleanup-info strong {
-  color: #991b1b;
+  color: #fca5a5;
   font-size: 14px;
 }
 
 .btn-danger {
-  background: #dc2626;
+  background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
   color: white;
   white-space: nowrap;
+  box-shadow: 0 4px 14px rgba(239, 68, 68, 0.3);
 }
 
 .btn-danger:hover:not(:disabled) {
-  background: #b91c1c;
+  background: #dc2626;
+  box-shadow: 0 6px 18px rgba(239, 68, 68, 0.45);
 }
 
 .btn-danger:disabled {
-  background: #f87171;
+  background: rgba(239, 68, 68, 0.4);
   cursor: not-allowed;
+  box-shadow: none;
 }
 
 .cleanup-status-feedback {
   margin-top: 12px;
   font-size: 13px;
-  font-weight: 500;
-  padding: 8px 12px;
-  border-radius: 6px;
+  font-weight: 600;
+  padding: 10px 14px;
+  border-radius: var(--radius-sm);
 }
 
 .cleanup-status-feedback.success {
-  background: #f0fdf4;
-  color: #166534;
-  border: 1px solid #bbf7d0;
+  background: var(--color-success-bg);
+  color: #34d399;
+  border: 1px solid rgba(52, 211, 153, 0.3);
 }
 
 .cleanup-status-feedback.error {
-  background: #fef2f2;
-  color: #991b1b;
-  border: 1px solid #fecaca;
+  background: var(--color-error-bg);
+  color: #f87171;
+  border: 1px solid rgba(248, 113, 113, 0.3);
 }
 </style>
 
