@@ -1641,7 +1641,17 @@ async def auto_import_loop():
             imported_any = False
             newly_imported_metas = []
 
-            # 1. Processar transferências ativas ou concluídas do SLSKD
+            # Carregar registo de álbuns ativos para isolar do fluxo de descoberta
+            album_downloads = load_album_downloads()
+            album_active_basenames = {
+                f.get("base_name", "").lower()
+                for alb in album_downloads
+                if alb.get("status") in ["searching", "downloading", "tagging"]
+                for f in alb.get("files", [])
+                if f.get("base_name")
+            }
+
+            # 1. Processar transferências ativas ou concluídas do SLSKD (apenas faixas de descoberta)
             for user_transfers in transfers:
                 username = user_transfers.get("username")
                 for d in user_transfers.get("directories", []):
@@ -1650,6 +1660,10 @@ async def auto_import_loop():
                         transfer_id = f.get("id")
                         filename = f.get("filename", "")
                         base_name = os.path.basename(filename).replace('\\', '/').split('/')[-1].lower()
+
+                        # Se este ficheiro pertence a um download de álbum ativo em FLAC, NÃO processar como descoberta!
+                        if base_name in album_active_basenames:
+                            continue
 
                         # Se falhou, foi cancelado ou rejeitado no SLSKD
                         if any(err_st in state for err_st in ["Errored", "Cancelled", "TimedOut", "Rejected"]):
@@ -1683,7 +1697,7 @@ async def auto_import_loop():
                                     newly_imported_metas.append(meta)
                                     imported_any = True
 
-            # 1.5 Processar Transferências de Álbuns Completos em FLAC 16/44
+            # 1.5 Processar Transferências de Álbuns Completos em FLAC 16/44 (para a biblioteca permanente)
             album_downloads = load_album_downloads()
             album_updated = False
             for album in album_downloads:
@@ -1730,6 +1744,15 @@ async def auto_import_loop():
                     album["detail"] = f"Guardado na Coleção Permanente ({len(ready_files)} faixas, FLAC 16-bit / 44.1 kHz)"
                     album["dest_folder"] = dest_folder
                     album_updated = True
+
+                    # Registar transferências como importadas para evitar qualquer reprocessamento
+                    for ut in transfers:
+                        for d in ut.get("directories", []):
+                            for tr_f in d.get("files", []):
+                                tr_b = os.path.basename(tr_f.get("filename", "")).replace('\\', '/').split('/')[-1].lower()
+                                if tr_b in [f.get("base_name", "").lower() for f in files]:
+                                    if tr_f.get("id"):
+                                        save_imported_transfer(tr_f["id"])
 
                     token = settings.get("PLEX_TOKEN")
                     if token:
@@ -1778,7 +1801,7 @@ async def auto_import_loop():
 
             # 3. Varrer a pasta /downloads por ficheiros de áudio prontos (que não pertencem a álbuns ativos)
             album_active_basenames = {
-                f.get("base_name")
+                f.get("base_name", "").lower()
                 for alb in load_album_downloads()
                 if alb.get("status") in ["searching", "downloading", "tagging"]
                 for f in alb.get("files", [])

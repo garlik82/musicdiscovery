@@ -5,5 +5,6 @@ plexapi
 httpx
 pydantic-settings
 mutagen
+python-multipart
 
 

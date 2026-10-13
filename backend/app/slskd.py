@@ -143,9 +143,32 @@ class SlskdClient:
             return self._score_results(results, search_query)
             
     def _score_results(self, results: List[Dict], query: str) -> List[Dict]:
-        """ Ordena os resultados para escolher a melhor opção (ex: dar prioridade a FLAC) """
+        """ Ordena os resultados para escolher a melhor opção (ex: dar prioridade a FLAC e estúdio) """
+        query_lower = query.lower()
+        is_live_query = bool(re.search(r'\b(live|concert|tour|bootleg|unplugged)\b', query_lower))
+
         def score(item):
             points = 0
+            fname_lower = item["filename"].lower()
+            
+            # Penalização severa de faixas ao vivo caso a pesquisa não seja intencionalmente ao vivo
+            if not is_live_query:
+                live_patterns = [
+                    r'\blive(\s+at|\s+in|\s+from)?\b',
+                    r'\(live\)',
+                    r'\[live\]',
+                    r'- live\b',
+                    r'\bconcert\b',
+                    r'\bin\s+concert\b',
+                    r'\ben\s+vivo\b',
+                    r'\bbootleg\b',
+                    r'\btour\b',
+                    r'\bfestival\b',
+                    r'\bunplugged\b',
+                    r'\bsoundboard\b'
+                ]
+                if any(re.search(pat, fname_lower) for pat in live_patterns):
+                    points -= 8000
             
             # Utilizadores com slots livres e pouca fila têm MUITA prioridade
             if item.get("hasFreeUploadSlot"):
@@ -329,9 +352,14 @@ class SlskdClient:
         import re
         import os
 
+        # Identificar se a busca é explicitamente por um álbum ao vivo
+        is_official_live = bool(re.search(r'\b(live|concert|tour|bootleg|unplugged)\b', album.lower()))
+
         # Limpar caracteres especiais dos nomes para melhorar a pesquisa no Soulseek
         clean_artist = re.sub(r'[^\w\s]', ' ', artist).strip()
         clean_album = re.sub(r'\(.*?\)|\[.*?\]', '', album)
+        if not is_official_live:
+            clean_album = re.sub(r'\b(live(\s+at|\s+in|\s+from)?.*|concert|tour|bootleg)\b', '', clean_album, flags=re.IGNORECASE)
         clean_album = re.sub(r'[^\w\s]', ' ', clean_album).strip()
         
         search_query = f"{clean_artist} {clean_album} flac".strip()
@@ -454,7 +482,38 @@ class SlskdClient:
                     continue
 
                 folder_lower = cand["folder"].lower()
+                
+                # Rejeição estrita de versões ao vivo quando procuramos álbum de estúdio
+                if not is_official_live:
+                    live_patterns = [
+                        r'\blive(\s+at|\s+in|\s+from)?\b',
+                        r'\bconcert\b',
+                        r'\bin\s+concert\b',
+                        r'\ben\s+vivo\b',
+                        r'\bbootleg\b',
+                        r'\btour\b',
+                        r'\bfestival\b',
+                        r'\bunplugged\b',
+                        r'\bsoundboard\b',
+                        r'\(live\)',
+                        r'\[live\]'
+                    ]
+                    # Descartar se o caminho da pasta contiver referências a concerto/ao vivo
+                    if any(re.search(pat, folder_lower) for pat in live_patterns):
+                        continue
+                        
+                    # Descartar se vários ficheiros tiverem indicação de 'live'
+                    live_files_count = sum(1 for f in flac_files if any(re.search(pat, f["filename"].lower()) for pat in [r'\blive\b', r'\(live\)', r'\[live\]', r'- live\b']))
+                    if live_files_count >= max(2, int(track_count * 0.3)):
+                        continue
+
                 points = 0
+                
+                # Bónus para indícios de versão de estúdio oficial
+                if not is_official_live:
+                    studio_indicators = ["studio", "original", "remastered", "deluxe edition", "album"]
+                    if any(ind in folder_lower for ind in studio_indicators):
+                        points += 600
 
                 # 1. Disponibilidade do Utilizador (Slots Livres e Velocidade)
                 if cand["hasFreeUploadSlot"]:

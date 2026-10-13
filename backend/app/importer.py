@@ -14,9 +14,40 @@ def sanitize_name(name: str) -> str:
     clean = re.sub(r'[\\/*?:"<>|]', '', name).strip()
     return clean if clean else "Unknown"
 
+def is_live_or_compilation(release_dict: Dict) -> bool:
+    """
+    Verifica se um release do MusicBrainz é ao vivo, compilação, demo ou bootleg.
+    """
+    rg = release_dict.get("release-group", {})
+    stypes = [s.lower() for s in (rg.get("secondary-types") or [])]
+    bad_stypes = {"live", "compilation", "remix", "demo", "bootleg", "soundtrack", "mixtape", "dj-mix"}
+    if any(st in bad_stypes for st in stypes):
+        return True
+    
+    title = release_dict.get("title", "").lower()
+    live_patterns = [
+        r'\blive(\s+at|\s+in|\s+from)?\b',
+        r'\(live\)',
+        r'\[live\]',
+        r'\bin\s+concert\b',
+        r'\ben\s+vivo\b',
+        r'\bbootleg\b',
+        r'\btour\b',
+        r'\bunplugged\b',
+        r'\bgreatest\s+hits\b',
+        r'\bbest\s+of\b',
+        r'\bthe\s+essential\b',
+        r'\banthology\b'
+    ]
+    if any(re.search(pat, title) for pat in live_patterns):
+        return True
+        
+    return False
+
 async def lookup_musicbrainz(artist: str, title: str) -> Optional[Dict]:
     """
     Pesquisa na API do MusicBrainz pelo artista e música para obter metadados oficiais.
+    Prioriza sempre álbuns de estúdio oficiais, rejeitando versões ao vivo e compilações.
     """
     clean_artist = re.sub(r'\(.*?\)|\[.*?\]', '', artist).strip()
     clean_title = re.sub(r'\(.*?\)|\[.*?\]', '', title).strip()
@@ -33,21 +64,79 @@ async def lookup_musicbrainz(artist: str, title: str) -> Optional[Dict]:
             if res.status_code == 200:
                 data = res.json()
                 recordings = data.get("recordings", [])
-                if recordings:
-                    rec = recordings[0]
-                    artist_name = rec.get("artist-credit", [{}])[0].get("name", clean_artist)
-                    title_name = rec.get("title", clean_title)
-                    releases = rec.get("releases", [])
-                    album_name = releases[0].get("title", "Singles") if releases else "Singles"
-                    date_val = releases[0].get("date", "") if releases else ""
+                
+                chosen_rec = None
+                chosen_release = None
+                
+                def matches_artist(rel):
+                    rel_artists = [ac.get("name", "").lower() for ac in rel.get("artist-credit", [])]
+                    if not rel_artists:
+                        return True
+                    ca = clean_artist.lower()
+                    return any(ca in a or a in ca for a in rel_artists)
+
+                # 1. Prioridade máxima: Álbum oficial de estúdio do próprio artista
+                for rec in recordings:
+                    for rel in rec.get("releases", []):
+                        if not matches_artist(rel):
+                            continue
+                        rg = rel.get("release-group", {})
+                        p_type = rg.get("primary-type", "")
+                        status = rel.get("status", "")
+                        if p_type == "Album" and status == "Official" and not is_live_or_compilation(rel):
+                            chosen_rec = rec
+                            chosen_release = rel
+                            break
+                    if chosen_release:
+                        break
+                
+                # 2. Prioridade secundária: Álbum ou EP não-live do artista
+                if not chosen_release:
+                    for rec in recordings:
+                        for rel in rec.get("releases", []):
+                            if not matches_artist(rel):
+                                continue
+                            rg = rel.get("release-group", {})
+                            p_type = rg.get("primary-type", "")
+                            if p_type in ["Album", "EP", "Single"] and not is_live_or_compilation(rel):
+                                chosen_rec = rec
+                                chosen_release = rel
+                                break
+                        if chosen_release:
+                            break
+
+                # 3. Qualquer release que não seja ao vivo
+                if not chosen_release:
+                    for rec in recordings:
+                        for rel in rec.get("releases", []):
+                            if not matches_artist(rel):
+                                continue
+                            if not is_live_or_compilation(rel):
+                                chosen_rec = rec
+                                chosen_release = rel
+                                break
+                        if chosen_release:
+                            break
+
+                # 4. Fallback final caso só haja lançamentos ao vivo
+                if not chosen_release and recordings:
+                    chosen_rec = recordings[0]
+                    rels = chosen_rec.get("releases", [])
+                    chosen_release = rels[0] if rels else None
+
+                if chosen_rec:
+                    artist_name = chosen_rec.get("artist-credit", [{}])[0].get("name", clean_artist)
+                    title_name = chosen_rec.get("title", clean_title)
+                    album_name = chosen_release.get("title", "Singles") if chosen_release else "Singles"
+                    date_val = chosen_release.get("date", "") if chosen_release else ""
                     
                     return {
                         "artist": artist_name,
                         "title": title_name,
                         "album": album_name,
                         "date": date_val,
-                        "musicbrainz_trackid": rec.get("id"),
-                        "musicbrainz_albumid": releases[0].get("id") if releases else None
+                        "musicbrainz_trackid": chosen_rec.get("id"),
+                        "musicbrainz_albumid": chosen_release.get("id") if chosen_release else None
                     }
     except Exception as e:
         print(f"Erro na pesquisa MusicBrainz: {e}")
@@ -353,27 +442,32 @@ async def lookup_musicbrainz_album(artist: str, album: str = "", track_title: st
     try:
         async with httpx.AsyncClient(timeout=12.0) as client:
             # 1. Se temos o nome do álbum, pesquisar releases diretamente
-            if clean_album and clean_album.lower() not in ["singles", "unknown", "desconhecido"]:
-                query = f'release:"{clean_album}" AND artist:"{clean_artist}"'
+            clean_album_studio = re.sub(r'\b(live(\s+at|\s+in|\s+from)?.*|concert|tour|bootleg)\b', '', clean_album, flags=re.IGNORECASE).strip()
+            album_queries = [clean_album]
+            if clean_album_studio and clean_album_studio.lower() != clean_album.lower():
+                album_queries.append(clean_album_studio)
+
+            for alb_q in album_queries:
+                if not alb_q or alb_q.lower() in ["singles", "unknown", "desconhecido"]:
+                    continue
+                query = f'release:"{alb_q}" AND artist:"{clean_artist}"'
                 url = f"https://musicbrainz.org/ws/2/release/?query={httpx.URL('', params={'q': query}).params['q']}&fmt=json"
                 res = await client.get(url, headers=headers)
                 if res.status_code == 200:
                     data = res.json()
                     releases = data.get("releases", [])
-                    # Dar prioridade a lançamentos oficiais de estúdio (Album)
+                    # Dar prioridade a lançamentos oficiais de estúdio (Album) sem Live
                     for r in releases:
                         status = r.get("status", "")
                         rg = r.get("release-group", {})
                         p_type = rg.get("primary-type", "")
-                        if p_type == "Album" or status == "Official":
+                        if (p_type == "Album" or status == "Official") and not is_live_or_compilation(r):
                             release_id = r.get("id")
-                            canonical_album = r.get("title", clean_album)
+                            canonical_album = r.get("title", alb_q)
                             canonical_artist = r.get("artist-credit", [{}])[0].get("name", clean_artist)
                             break
-                    if not release_id and releases:
-                        release_id = releases[0].get("id")
-                        canonical_album = releases[0].get("title", clean_album)
-                        canonical_artist = releases[0].get("artist-credit", [{}])[0].get("name", clean_artist)
+                    if release_id:
+                        break
 
             # 2. Se não encontramos pelo álbum, pesquisar pela música de referência
             if not release_id and clean_track:
@@ -389,17 +483,24 @@ async def lookup_musicbrainz_album(artist: str, album: str = "", track_title: st
                                 status = r.get("status", "")
                                 rg = r.get("release-group", {})
                                 p_type = rg.get("primary-type", "")
-                                if p_type == "Album" or status == "Official":
+                                if (p_type == "Album" or status == "Official") and not is_live_or_compilation(r):
                                     release_id = r.get("id")
                                     canonical_album = r.get("title", clean_album)
                                     canonical_artist = rec.get("artist-credit", [{}])[0].get("name", clean_artist)
                                     break
                             if release_id:
                                 break
+                        # Fallback se não houver álbum de estúdio puro
                         if not release_id and recordings and recordings[0].get("releases"):
-                            r0 = recordings[0]["releases"][0]
-                            release_id = r0.get("id")
-                            canonical_album = r0.get("title", clean_album)
+                            for r in recordings[0]["releases"]:
+                                if not is_live_or_compilation(r):
+                                    release_id = r.get("id")
+                                    canonical_album = r.get("title", clean_album)
+                                    break
+                            if not release_id:
+                                r0 = recordings[0]["releases"][0]
+                                release_id = r0.get("id")
+                                canonical_album = r0.get("title", clean_album)
 
             # 3. Se temos o release_id, obter o alinhamento completo de faixas (tracklist)
             if release_id:
