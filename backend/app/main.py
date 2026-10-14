@@ -1839,12 +1839,15 @@ async def auto_import_loop():
                         if base_name in album_active_basenames:
                             continue
 
+                        # Se não foi uma faixa colocada na fila pelo MusicDiscovery/PlexDiscover, NUNCA tocar nem interferir!
+                        if base_name not in pending_downloads:
+                            continue
+
                         # Se falhou, foi cancelado ou rejeitado no SLSKD
                         if any(err_st in state for err_st in ["Errored", "Cancelled", "TimedOut", "Rejected"]):
-                            if base_name in pending_downloads:
-                                meta_hint = pending_downloads.pop(base_name)
-                                save_pending_downloads(pending_downloads)
-                                update_queue_item_status(meta_hint.get("artist", ""), meta_hint.get("title", ""), "error", f"Transferência cancelada/falhou: {state}")
+                            meta_hint = pending_downloads.pop(base_name)
+                            save_pending_downloads(pending_downloads)
+                            update_queue_item_status(meta_hint.get("artist", ""), meta_hint.get("title", ""), "error", f"Transferência cancelada/falhou: {state}")
                             if transfer_id and username:
                                 try:
                                     await client.remove_download(username, transfer_id)
@@ -1973,36 +1976,6 @@ async def auto_import_loop():
                     pending_downloads.pop(k, None)
                 save_pending_downloads(pending_downloads)
 
-            # 3. Varrer a pasta /downloads por ficheiros de áudio prontos (que não pertencem a álbuns ativos)
-            album_active_basenames = {
-                f.get("base_name", "").lower()
-                for alb in load_album_downloads()
-                if alb.get("status") in ["searching", "downloading", "tagging"]
-                for f in alb.get("files", [])
-                if f.get("base_name")
-            }
-
-            if os.path.exists("/downloads"):
-                for p_audio in list(Path("/downloads").rglob("*")):
-                    if p_audio.is_file() and p_audio.suffix.lower() in [".flac", ".mp3", ".m4a", ".ogg"]:
-                        if p_audio.name.lower() in album_active_basenames:
-                            continue
-                        is_active_dl = any(
-                            any(os.path.basename(f.get("filename", "")).lower() == p_audio.name.lower() for f in d.get("files", []))
-                            for ut in transfers for d in ut.get("directories", [])
-                        )
-                        if not is_active_dl:
-                            print(f"Auto-import: Ficheiro de áudio detetado em /downloads: {p_audio}")
-                            meta = await process_and_import_file(str(p_audio))
-                            if meta:
-                                newly_imported_metas.append(meta)
-                                imported_any = True
-
-            # Manter a fila de downloads do slskd limpa e sem transferências concluídas acumuladas
-            try:
-                await client.clear_completed_downloads()
-            except Exception:
-                pass
 
             # Adicionar novas faixas importadas à lista pendente de injeção
             pending_injections = load_pending_injections()
