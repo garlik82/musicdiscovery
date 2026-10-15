@@ -447,6 +447,12 @@ def get_session_album_info(server, session):
                     item = server.fetchItem(source_key)
                     if item.TYPE == 'album':
                         tracks = item.tracks()
+                        # Verificar se a faixa atualmente a tocar pertence efetivamente a este álbum
+                        track_keys = {str(getattr(t, 'ratingKey', '')) for t in tracks}
+                        if rating_key not in track_keys:
+                            # Faixa injetada ou vinda de outra fonte: não tratar como o álbum inicial
+                            return {'is_album': False, 'source': 'injected_queue', 'play_queue_id': int(pq_id) if pq_id else None}
+
                         total_album_duration_ms = sum(getattr(t, 'duration', 0) or 0 for t in tracks)
                         current_track_index = getattr(session, 'index', 1) or 1
                         current_track_offset_ms = getattr(session, 'viewOffset', 0) or 0
@@ -477,7 +483,6 @@ def get_session_album_info(server, session):
                             'track_count': len(tracks),
                             'current_track_index': current_track_index,
                             'current_track_offset_ms': current_track_offset_ms,
-                            'current_track_duration_ms': current_track_dur_ms
                         }
                     else:
                         return {'is_album': False, 'source': item.TYPE, 'play_queue_id': int(pq_id) if pq_id else None}
@@ -609,7 +614,21 @@ def _get_now_playing_data():
                 player = session.players[0] if session.players else None
                 player_state = getattr(player, 'state', 'playing') if player else 'playing'
                 album_info = get_session_album_info(server, session)
-                thumb = album_info.get("thumb") or getattr(session, 'thumb', None) or getattr(session, 'parentThumb', None)
+                # Obter a capa real da faixa que está a tocar neste momento
+                thumb = (
+                    getattr(session, 'parentThumb', None) or
+                    getattr(session, 'thumb', None) or
+                    getattr(session, 'grandparentThumb', None) or
+                    album_info.get("thumb")
+                )
+                if not thumb:
+                    try:
+                        parent_rk = getattr(session, 'parentRatingKey', None)
+                        if parent_rk:
+                            parent_item = server.fetchItem(int(parent_rk))
+                            thumb = getattr(parent_item, 'thumb', None)
+                    except Exception:
+                        pass
                 rating_key = str(getattr(session, 'ratingKey', ''))
                 user_rating = float(getattr(session, 'userRating', 0) or 0)
                 is_favorite = (user_rating >= 8.0)

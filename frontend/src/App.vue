@@ -103,6 +103,7 @@
               <div class="album-art-wrapper">
                 <img 
                   v-if="nowPlaying.thumb" 
+                  :key="nowPlaying.thumb"
                   :src="`${API_BASE}/plex/image?path=${encodeURIComponent(nowPlaying.thumb)}`" 
                   alt="Capa do Álbum" 
                   class="album-art" 
