@@ -1,6 +1,7 @@
 import httpx
 import uuid
 import asyncio
+import re
 from typing import List, Dict, Optional
 
 class SlskdClient:

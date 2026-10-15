@@ -10,6 +10,7 @@ import uuid
 import asyncio
 from typing import Optional, Dict, List, Set, Any
 from pathlib import Path
+import re
 
 app = FastAPI(title="PlexDiscover API")
 
@@ -1110,10 +1111,11 @@ def check_plex_login(pin_id: int):
 import re
 
 def build_slskd_query(artist: str, title: str) -> str:
-    # Remover parentesis e brackets e caracteres especiais
+    # Remover parentesis e brackets
     full_str = f"{artist} {title}"
-    clean_str = re.sub(r'\(.*?\)|\[.*?\]', '', full_str)
-    clean_str = re.sub(r'[^\w\s]', '', clean_str)
+    clean_str = re.sub(r'\(.*?\)|\[.*?\]', ' ', full_str)
+    # Substituir hífens e pontuação por espaço para não juntar palavras (ex: bosse-de-nage -> bosse de nage)
+    clean_str = re.sub(r'[^\w\s]', ' ', clean_str)
     
     # Palavras com mais de 1 caracter
     words = [w for w in clean_str.split() if len(w) > 1]
